@@ -1,0 +1,45 @@
+{
+  "name": "dsh-dpharness",
+  "version": "0.3.3",
+  "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a site-wide floating panel, with one-click install via dshmarket or the dsh CLI. Read-only catalog plus an opt-out telemetry relay.",
+  "author": "zhanghao3693 <zhanghao3693@qq.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhanghao3693/dsh-dpharness.git"
+  },
+  "homepage": "https://dpharness.com/plugin/zhanghao3693/dsh-dpharness",
+  "bugs": {
+    "url": "https://github.com/zhanghao3693/dsh-dpharness/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "catalog",
+    "dpharness"
+  ],
+  "license": "MIT"
+}
