@@ -1,6 +1,6 @@
 {
   "name": "dsh-dpharness",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a site-wide floating panel, with one-click install via dshmarket or the dsh CLI. Read-only catalog plus an opt-out telemetry relay.",
   "author": "zhanghao3693 <zhanghao3693@qq.com>",
   "repository": {
@@ -27,12 +27,16 @@
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-ui-conversation"
       ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
   },
   "files": [
     "lib/index.js",
     "lib/client.js",
-    "README.md"
+    "README.md",
+    "cordis.patch.yml"
   ],
   "keywords": [
     "dsh",
