@@ -66,6 +66,21 @@ globalThis.fetch = async (url, options) => {
             installCheck: { status: "pass", pkgName: "dsh-better-sidebar" },
             finalScore: 71,
           },
+          {
+            // 未发布到 npm 的那一类：站点给 owner/repo，走 GitHub 源安装
+            fullName: "zhanghao3693/dsh-dpharness",
+            name: "dsh-dpharness",
+            owner: "zhanghao3693",
+            htmlUrl: "https://github.com/zhanghao3693/dsh-dpharness",
+            description: "严选插件：在 dsh 里浏览 dpharness.com 目录并一键安装",
+            stars: 0,
+            category: "market",
+            tier: "core",
+            pluginType: "deepseek-harness",
+            verifyStatus: "warn",
+            installCheck: { status: "warn", pkgName: "dsh-dpharness" },
+            finalScore: 30,
+          },
         ],
       }),
     };
@@ -121,6 +136,14 @@ check("search: 安装命令形式", sample && /^dsh plugin --profile web add \S+
 check("search: 带出汉化正文 descZh", sample && /开放的侧边栏底座/.test(sample.descZh || ""), sample && sample.descZh);
 check("search: 带出卖点 sell", sample && sample.sell === "已适配 DSH 原生侧边栏 API，右列就是工作台", sample && sample.sell);
 check("search: 分类已译中文", sample && sample.cat === "浏览器", sample && sample.cat);
+
+/* --- 安装命令口径必须与站点 resolveInstallTarget 一致 --- */
+const repoItem = res.out.body.plugins[1];
+check("口径: 未验证 npm 时用 owner/repo", repoItem && repoItem.cmd === "dsh plugin --profile web add zhanghao3693/dsh-dpharness", repoItem && repoItem.cmd);
+check("口径: 标注来源为 repo", repoItem && repoItem.src === "repo" && repoItem.verified === false, repoItem && `${repoItem.src}/${repoItem.verified}`);
+check("口径: 未验证时不给一键安装（pkg 为空）", repoItem && repoItem.pkg === null, JSON.stringify(repoItem && repoItem.pkg));
+check("口径: status=warn 也算未验证（只有 pass 才用包名）", sample && sample.src === "npm" && sample.verified === true, sample && `${sample.src}/${sample.verified}`);
+check("口径: 两条都有命令，不再出现『什么都不给』", !!(sample && sample.cmd) && !!(repoItem && repoItem.cmd));
 
 /* --- pickZh：用真实抓到的上游样本做判据（含垃圾数据） --- */
 const good = [
