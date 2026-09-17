@@ -1,6 +1,20 @@
 #!/bin/bash
 # install.sh — 把 dsh-dpharness 安装到 dsh 的 web profile。
 #
+# ⚠️ 这是**开发用**脚本（从本地目录装，便于改完立刻看效果）。
+#    普通安装请用官方命令：
+#
+#        dsh plugin --profile web add dsh-dpharness
+#
+# 🔴 两者不能同时用：官方安装会把它并入 profile 的 bundle 层（也会 insert 同一个
+#    `id: dpharness`），而本脚本往 profile 的 cordis.patch.yml 里也插一段 insert ——
+#    **同一个 id 被插入两次会让 dsh 启动硬失败**（依据：dshmarket lib/hot.js 注释）。
+#    所以：
+#      · 已用官方命令装过 → 不要再跑本脚本；要跑就先
+#          `dsh plugin --profile web remove dsh-dpharness`
+#      · 已用本脚本装过 → 跑官方命令前，必须先删掉 cordis.patch.yml 里
+#          `id: dpharness` 那段 insert（2026-09-17 已为使用者做过一次迁移）
+#
 # 用法：bash ~/Documents/dsh-dpharness/install.sh
 # 装完必须重启 dsh web（侧边栏「重启」按钮，或 pkill -9 -f "bin/dsh web" 让 launchd 拉起）。
 set -euo pipefail

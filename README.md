@@ -67,16 +67,28 @@
 
 ## 安装本插件
 
+**官方命令（推荐）**：
+
 ```bash
-dsh plugin --profile web add dsh-dpharness@<版本>
+dsh plugin --profile web add dsh-dpharness
 ```
 
 > `--profile web` 是 dsh CLI 的**必需参数**，省略会直接报
 > `required option '--profile <name>' not specified`。
 > 任何来源给出的 `dsh plugin add <owner/repo>` 都不可用。
 
-本机安装（开发用）：`bash install.sh`，然后重启 dsh
+也可从 GitHub 源安装（等价，未依赖 npm 缓存时用）：
+
+```bash
+dsh plugin --profile web add zhanghao3693/dsh-dpharness
+```
+
+开发用（改完立刻看效果，从本地目录装）：`bash install.sh`，然后重启 dsh
 （侧边栏「重启」按钮，或 `pkill -9 -f "bin/dsh web"` 让 launchd 拉起）。
+
+> ⚠️ **`install.sh` 与官方命令不能混用**：官方安装会把它并入 profile 的 bundle 层，
+> 而 `install.sh` 是往 profile 的 `cordis.patch.yml` 里插一段 `insert` ——
+> 同一个 `id` 被插入两次会让 **dsh 启动硬失败**。切换前先清掉另一边。
 
 ## 卸载
 
