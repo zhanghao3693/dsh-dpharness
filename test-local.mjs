@@ -39,6 +39,57 @@ const sent = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, options) => {
   sent.push({ url: String(url), options });
+  // 「分类精选」上游（站点 GET /api/best）：结构与真实接口一致（大类→小类→条目）
+  if (String(url).includes("/api/best")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        month: "2026-09",
+        total: 2,
+        categories: [
+          {
+            key: "browser",
+            label: "浏览器",
+            count: 2,
+            subs: [
+              {
+                key: "sidebar",
+                label: "侧边栏",
+                summary: "把工作台放进右列，适合常开侧栏的人。",
+                items: [
+                  {
+                    fullName: "omdsh-dev/DSH-better-sidebar",
+                    name: "DSH-better-sidebar",
+                    nameZh: "可扩展侧边栏工作台",
+                    htmlUrl: "https://github.com/omdsh-dev/DSH-better-sidebar",
+                    tagline: "已适配 DSH 原生侧边栏 API，右列就是工作台",
+                    descriptionZh: null,
+                    stars: 3628,
+                    verifyStatus: "pass",
+                    installCheck: { status: "pass", pkgName: "dsh-better-sidebar" },
+                    rank: 1,
+                    reason: "小类第 1 · 实装验证通过 · 周下载 12.8 万",
+                  },
+                  {
+                    // 未验证 npm 的那一类：必须退回 owner/repo（与站点口径一致）
+                    fullName: "zhanghao3693/dsh-dpharness",
+                    name: "dsh-dpharness",
+                    htmlUrl: "https://github.com/zhanghao3693/dsh-dpharness",
+                    stars: 0,
+                    verifyStatus: "none",
+                    installCheck: { status: "warn", pkgName: "dsh-dpharness" },
+                    rank: 2,
+                    reason: "小类第 2 · 综合分 30",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    };
+  }
   if (String(url).includes("/api/plugins")) {
     return {
       ok: true,
@@ -100,7 +151,7 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册四条路由", Object.keys(routes).length === 4, Object.keys(routes).join(", "));
+check("host: 注册五条路由", Object.keys(routes).length === 5, Object.keys(routes).join(", "));
 
 function mockRes() {
   const out = { status: 0, body: null };
@@ -226,6 +277,46 @@ body = badVid.forwarded && JSON.parse(badVid.forwarded.options.body);
 check("relay: 非法 visitorId → null", body && body.visitorId === null, JSON.stringify(body && body.visitorId));
 
 /* --- install route：只测拒绝路径与状态形状，自动化测试绝不真装 --- */
+/* --- 分类精选（站点 /best 的同源数据） ---
+   放在 install 段之前：那条「自动化测试未触发真实安装」的不变式会在 install 段开始时
+   对 `sent` 取快照，任何晚于它的出站调用都会被算作"install 段新增请求"（本次踩到）。 */
+const best = mockRes();
+await routes["/api/dpharness/best"]({ method: "GET", url: "/api/dpharness/best" }, best);
+check("best: 200", best.out.status === 200, "status=" + best.out.status);
+check(
+  "best: 带期次与总数",
+  best.out.body.month === "2026-09" && best.out.body.total === 2,
+  JSON.stringify({ month: best.out.body.month, total: best.out.body.total }),
+);
+const bestCat = (best.out.body.categories || [])[0];
+const bestSub = bestCat && (bestCat.subs || [])[0];
+check(
+  "best: 三级分组（大类→小类→条目）",
+  !!(bestCat && bestSub && (bestSub.items || []).length === 2),
+  bestCat ? `${bestCat.label} / ${bestSub && bestSub.label}` : "无分类",
+);
+const bestItem = bestSub && bestSub.items[0];
+check(
+  "best: 条目走同一个 slim()（命令/来源/包名齐全）",
+  bestItem && bestItem.cmd === "dsh plugin --profile web add dsh-better-sidebar" && bestItem.src === "npm" && bestItem.pkg === "dsh-better-sidebar",
+  bestItem && `${bestItem.cmd} | src=${bestItem.src}`,
+);
+check(
+  "best: 名次与上榜理由被保留（去掉就只是又一个列表）",
+  bestItem && bestItem.rank === 1 && typeof bestItem.reason === "string" && bestItem.reason.includes("实装验证通过"),
+  bestItem && `#${bestItem.rank} ${bestItem.reason}`,
+);
+check("best: 大类 key 注入条目的分类字段", bestItem && bestItem.cat === "浏览器", bestItem && bestItem.cat);
+check(
+  "best: 未验证 npm 的条目退回 owner/repo",
+  bestSub && bestSub.items[1] && bestSub.items[1].src === "repo" && bestSub.items[1].cmd === "dsh plugin --profile web add zhanghao3693/dsh-dpharness",
+  bestSub && bestSub.items[1] && bestSub.items[1].cmd,
+);
+
+const best405 = mockRes();
+await routes["/api/dpharness/best"]({ method: "POST", url: "/api/dpharness/best" }, best405);
+check("best: 非 GET → 405", best405.out.status === 405, "status=" + best405.out.status);
+
 const outboundBeforeInstall = sent.length;
 
 const installGet = mockRes();
@@ -250,7 +341,8 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出四条路由", metaRoutes.out.body.routes.length === 4, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出五条路由", metaRoutes.out.body.routes.length === 5, JSON.stringify(metaRoutes.out.body.routes));
+
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("自动化测试未触发真实安装", sent.length === outboundBeforeInstall && installGet.out.body.job.active === false, "install 段新增外部请求=" + (sent.length - outboundBeforeInstall));
 

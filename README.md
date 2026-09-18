@@ -3,6 +3,19 @@
 在 DeepSeek Harness（dsh）里浏览、搜索 [dpharness.com](https://dpharness.com) 的 dsh 插件目录，
 **并可直接一键安装**。
 
+## 两个视图
+
+面板（浮窗与页签共用同一套组件）顶部可在两个视图间切换：
+
+| 视图 | 数据来源 | 回答的问题 |
+|---|---|---|
+| **严选推荐** | `GET /api/plugins`（全量目录） | 「我知道要什么，帮我找」——可搜索、可按 Star 排序 |
+| **分类精选** | `GET /api/best`（月度策展，与站点 [/best](https://dpharness.com/best) 同一份数据） | 「我该装哪几个」——按大类 → 小类分组，每小类只留 2~3 个 |
+
+分类精选视图刻意保留两项元数据：**小类内名次**与**上榜理由**（如「小类第 1 · 实装验证通过 · 周下载 12.8 万」）。
+去掉它们，这份清单就只是又一个列表；它们的价值恰恰在于「为什么是它」可复核。
+入榜门槛（站点侧规则）：通过静态安装检查或 CI 实装验证 + 汉化完成；每月 1 日重算并公开淘汰原因。
+
 ## 三个入口
 
 | 入口 | 位置 | 说明 |
@@ -52,6 +65,7 @@
 | 路由 | 说明 |
 |---|---|
 | `GET /api/dpharness/search?q=&take=&sort=stars` | 目录查询，字段裁剪后返回，按 `q+take+sort` 缓存 5 分钟 |
+| `GET /api/dpharness/best` | 分类精选榜单（站点 `/api/best` 的代理 + 字段裁剪），缓存 5 分钟 |
 | `POST /api/dpharness/event` | 埋点代理 → `dpharness.com/api/track/event` |
 | `POST /api/dpharness/install` | `{ pkg }`，spawn `dsh plugin add`；返回 202 + 任务启动 |
 | `GET /api/dpharness/install` | 安装任务进度与结果 |
