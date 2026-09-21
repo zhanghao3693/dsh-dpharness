@@ -151,7 +151,7 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册五条路由", Object.keys(routes).length === 5, Object.keys(routes).join(", "));
+check("host: 注册六条路由", Object.keys(routes).length === 6, Object.keys(routes).join(", "));
 
 function mockRes() {
   const out = { status: 0, body: null };
@@ -266,7 +266,7 @@ check("relay: UA 带插件标识", copy.forwarded && /dsh-dpharness\/\d+\.\d+\.\
 
 const search = await relay({ event: "plugin_hub", visitorId: vid, detail: { action: "search", length: 7, results: 23 } });
 body = search.forwarded && JSON.parse(search.forwarded.options.body);
-check("relay: plugin_hub 载荷", body && body.type === "plugin_hub" && body.value === "search:len=7:hits=23", JSON.stringify(body));
+check("relay: plugin_hub 载荷", body && body.type === "plugin_hub" && body.value === "search:len=7:hits=23:v=" + host.VERSION, JSON.stringify(body));
 check("relay: 不含搜索关键词原文", body && !/kimi|sidebar/i.test(String(body.value)), body && body.value);
 
 const bad = await relay({ event: "whatever", visitorId: vid, detail: {} });
@@ -341,10 +341,71 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出五条路由", metaRoutes.out.body.routes.length === 5, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出六条路由", metaRoutes.out.body.routes.length === 6, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
+check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
 check("自动化测试未触发真实安装", sent.length === outboundBeforeInstall && installGet.out.body.job.active === false, "install 段新增外部请求=" + (sent.length - outboundBeforeInstall));
+
+/* --- v0.4.2：安装漏斗与「安装成功之后」的埋点 ---
+   这一段回答的问题：装完之后到底发生过什么。此前只有 installed_*（成功那一刻），
+   失败、取消、重启、重启后是否生效全都没有记录。 */
+const hello = await relay({ event: "plugin_hub", visitorId: vid, detail: { action: "hello" } });
+body = hello.forwarded && JSON.parse(hello.forwarded.options.body);
+check("relay: 每条事件附插件版本（新埋点覆盖率的唯一判据）", body && body.value === "hello:v=" + host.VERSION, JSON.stringify(body && body.value));
+
+const failed = await relay({
+  event: "plugin_hub",
+  visitorId: vid,
+  detail: { action: "install_failed", via: "local", why: "cli_exit" },
+});
+body = failed.forwarded && JSON.parse(failed.forwarded.options.body);
+check("relay: 安装失败带阶段与闭集原因", body && body.value === "install_failed:via=local:why=cli_exit:v=" + host.VERSION, JSON.stringify(body && body.value));
+
+const whyDirty = await relay({
+  event: "plugin_hub",
+  visitorId: vid,
+  detail: { action: "install_failed", via: "local", why: "boom; rm -rf /tmp/x" },
+});
+body = whyDirty.forwarded && JSON.parse(whyDirty.forwarded.options.body);
+check("relay: 原因字段被收紧（不带出本地路径/元字符）", body && !/[ ;]/.test(String(body.value).split("why=")[1] || ""), JSON.stringify(body && body.value));
+
+const postKnown = await relay({
+  event: "plugin_hub",
+  visitorId: vid,
+  detail: { action: "post_install", via: "local", restarted: true, bundled: false },
+});
+body = postKnown.forwarded && JSON.parse(postKnown.forwarded.options.body);
+check("relay: 安装后回执（重启/生效两个布尔量）", body && body.value === "post_install:via=local:restarted=1:bundled=0:v=" + host.VERSION, JSON.stringify(body && body.value));
+
+const postUnknown = await relay({ event: "plugin_hub", visitorId: vid, detail: { action: "post_install", via: "market" } });
+body = postUnknown.forwarded && JSON.parse(postUnknown.forwarded.options.body);
+check("relay: 查不到就不写字段（未知必须区别于否）", body && body.value === "post_install:via=market:v=" + host.VERSION && !/restarted|bundled/.test(body.value), JSON.stringify(body && body.value));
+
+/* postinstall 路由：两个判据都来自 host（客户端无法自证） */
+const pkgQuery = "pkg=dsh-dpharness&via=local&at=";
+const postRoute = async (query, method = "GET") => {
+  const out = mockRes();
+  await routes["/api/dpharness/postinstall"]({ method, url: "/api/dpharness/postinstall?" + query }, out);
+  return out;
+};
+const postFar = await postRoute(pkgQuery + (Date.now() + 60 * 1000));
+check("postinstall: 安装时间在未来 → restarted=false", postFar.out.status === 200 && postFar.out.body.restarted === false, JSON.stringify(postFar.out.body));
+const postPast = await postRoute(pkgQuery + "1");
+check("postinstall: 进程启动晚于安装 → restarted=true", postPast.out.body.restarted === true, JSON.stringify(postPast.out.body));
+const postNoAt = await postRoute("pkg=dsh-dpharness&via=local&at=abc");
+check("postinstall: 时间戳不可用 → restarted=null（不是 false）", postNoAt.out.body.restarted === null, JSON.stringify(postNoAt.out.body));
+const post405 = await postRoute("", "POST");
+check("postinstall: 非 GET → 405", post405.out.status === 405, "status=" + post405.out.status);
+const postUnsafe = await postRoute("pkg=" + encodeURIComponent("$(whoami)") + "&at=1");
+check("postinstall: 不安全包名不落盘查询", postUnsafe.out.body.dep === null && postUnsafe.out.body.bundled === null, JSON.stringify(postUnsafe.out.body));
+
+/* pkgState 三态：true / false / null 必须各不相同 —— 「查不到」被当成
+   「没装上」会让整条漏斗的结论反过来。 */
+check("pkgState: 清单不可读 → 全 null", JSON.stringify(host.pkgState("x", null)) === '{"dep":null,"bundled":null}', JSON.stringify(host.pkgState("x", null)));
+check("pkgState: 有依赖无 bundles → dep=true, bundled=null", JSON.stringify(host.pkgState("x", { dependencies: { x: "1.0.0" } })) === '{"dep":true,"bundled":null}', JSON.stringify(host.pkgState("x", { dependencies: { x: "1.0.0" } })));
+check("pkgState: 在加载清单里 → bundled=true", JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: ["x"] } } })) === '{"dep":false,"bundled":true}', JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: ["x"] } } })));
+check("pkgState: 都不在 → 全 false", JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: [] } } })) === '{"dep":false,"bundled":false}', JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: [] } } })));
 
 globalThis.fetch = realFetch;
 
@@ -355,7 +416,26 @@ globalThis.localStorage = {
   store: new Map(),
   getItem(key) { return this.store.has(key) ? this.store.get(key) : null; },
   setItem(key, value) { this.store.set(key, String(value)); },
+  removeItem(key) { this.store.delete(key); },
 };
+
+/* 客户端埋点要**真跑一遍**才算验证过 —— 装一个能捕获并应答的 fetch。
+   此前 client 段没有 mock，apply() 里的埋点打到不存在的相对 URL 上被静默吞掉，
+   等于这段代码从来没被真正执行过。 */
+const hubCalls = [];
+let postinstallReply = { ok: true, restarted: true, bundled: true, dep: true };
+globalThis.fetch = async (url, options) => {
+  const target = String(url);
+  hubCalls.push({ url: target, options });
+  if (target.includes("/api/dpharness/postinstall")) {
+    return { ok: true, status: 200, json: async () => postinstallReply };
+  }
+  return { ok: true, status: 200, json: async () => ({ ok: true }) };
+};
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+const hubEvents = () =>
+  hubCalls.filter((c) => c.url.includes("/api/dpharness/event")).map((c) => JSON.parse(c.options.body));
+
 new Function(fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8"))();
 check("client: 模块被注册", spec !== null && spec.id === "dsh-dpharness", spec && spec.id);
 
@@ -374,12 +454,46 @@ const clientCtx = {
     register: (options, view) => { registered[options.name] = { options, view }; return { dispose() {} }; },
   },
 };
+/* 留一张「上次安装成功」的凭据，验证加载时会不会去取回执 */
+localStorage.setItem("dph-hub-pending", JSON.stringify({ pkg: "dsh-better-sidebar", via: "local", at: 1 }));
 client.apply(clientCtx);
+await tick();
 const slotNames = Object.keys(registered).sort();
 check("client: 注册三个入口", slotNames.length === 3, slotNames.join(", "));
 check("client: 含页签", !!registered["conversation.view"]);
 check("client: 含左下入口", !!registered["sidebar.footer.action"]);
 check("client: 含全站浮窗", !!registered["shell.overlay"]);
+
+/* --- v0.4.2：加载心跳 + 安装后回执（跑的是真实代码路径，不是源码匹配） --- */
+const firstEvents = hubEvents();
+check("client: 加载即上报 hello", firstEvents.some((e) => e.detail.action === "hello"), JSON.stringify(firstEvents.map((e) => e.detail.action)));
+const postCallIndex = hubCalls.findIndex((c) => c.url.includes("/api/dpharness/postinstall"));
+check("client: 有 pending 时查回执（带上次的包名/路径/时间）", postCallIndex >= 0 && /pkg=dsh-better-sidebar/.test(hubCalls[postCallIndex].url) && /via=local/.test(hubCalls[postCallIndex].url) && /at=1/.test(hubCalls[postCallIndex].url), hubCalls[postCallIndex] && hubCalls[postCallIndex].url);
+const postEvent = firstEvents.find((e) => e.detail.action === "post_install");
+check("client: 回执带上 host 给出的判定", postEvent && postEvent.detail.restarted === true && postEvent.detail.bundled === true && postEvent.detail.via === "local", JSON.stringify(postEvent && postEvent.detail));
+check("client: 回执取走后清掉 pending", localStorage.getItem("dph-hub-pending") === null);
+
+/* host 无法判定时（null）必须省略字段 —— 降级成 false 会把「没查到」
+   统计成一个具体的否定结论，整条漏斗的方向就反了。 */
+localStorage.setItem("dph-hub-pending", JSON.stringify({ pkg: "some-plugin", via: "market", at: 1 }));
+postinstallReply = { ok: true, restarted: null, bundled: null, dep: null };
+hubCalls.length = 0;
+client.apply(clientCtx);
+await tick();
+const unknownEvent = hubEvents().find((e) => e.detail.action === "post_install");
+check(
+  "client: 无法判定 → 不写字段（未知≠否）",
+  !!unknownEvent && !("restarted" in unknownEvent.detail) && !("bundled" in unknownEvent.detail) && unknownEvent.detail.via === "market",
+  JSON.stringify(unknownEvent && unknownEvent.detail),
+);
+
+/* 第三次加载：pending 已被上一次取走，不该再查 —— 否则每次开页面都发一条，
+   回执会从「一次性事件」退化成「每次加载都刷」的心跳。 */
+hubCalls.length = 0;
+client.apply(clientCtx);
+await tick();
+check("client: pending 已消费 → 不再查回执", hubCalls.filter((c) => c.url.includes("/postinstall")).length === 0, JSON.stringify(hubCalls.map((c) => c.url)));
+check("client: 回执只发一次（每次加载仍会发 hello）", hubEvents().filter((e) => e.detail.action === "post_install").length === 0 && hubEvents().some((e) => e.detail.action === "hello"));
 
 const react = req("react");
 const { renderToStaticMarkup } = req("react-dom/server");
@@ -400,6 +514,10 @@ check("client: 安装优先走 dshmarket 路由", clientSource.includes('"/dsh-m
 check("client: 降级走自有 host 路由", clientSource.includes('"/api/dpharness/install"'));
 check("client: 400/404 才降级（409 不降级）", /status === 400 \|\| market\.status === 404/.test(clientSource));
 check("client: 复制与安装分别埋点", clientSource.includes('"copy_install"') && clientSource.includes('action: "install"'));
+check("client: 安装失败区分阶段与原因", /action: "install_failed", via: "market", why/.test(clientSource) && /why: local\.status === 409 \? "busy" : "local_rejected"/.test(clientSource));
+check("client: 确认框的流向单独埋点", clientSource.includes('action: "install_ask"') && clientSource.includes('action: "install_cancel"'));
+check("client: 点击重启即上报（结果靠回执证明）", clientSource.includes('action: "restart_click"') && clientSource.includes('action: "restart_failed"'));
+check("client: 失败原因只发闭集枚举，不发错误原文", !/why: String\(/.test(clientSource) && !/why: done\.message/.test(clientSource));
 
 /* --- 浮窗可拖动：位置夹取是纯函数，断言边界 --- */
 check("client: 暴露 clampPos 供测试", typeof client.clampPos === "function");

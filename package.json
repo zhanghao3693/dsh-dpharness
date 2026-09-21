@@ -1,7 +1,7 @@
 {
   "name": "dsh-dpharness",
-  "version": "0.4.1",
-  "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a site-wide floating panel, with one-click install via dshmarket or the dsh CLI. Read-only catalog plus an opt-out telemetry relay.",
+  "version": "0.4.2",
+  "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a site-wide floating panel, with one-click install via dshmarket or the dsh CLI. Read-only catalog plus an opt-out telemetry relay covering the full install funnel.",
   "author": "zhanghao3693 <zhanghao3693@qq.com>",
   "repository": {
     "type": "git",
