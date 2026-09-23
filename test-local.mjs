@@ -500,6 +500,19 @@ const { renderToStaticMarkup } = req("react-dom/server");
 
 const tabHtml = renderToStaticMarkup(react.createElement(registered["conversation.view"].view, {}));
 check("tab: SSR 渲染", tabHtml.includes("dph_root"), tabHtml.slice(0, 80));
+/* v0.4.4：会话端页签加入「分类精选」—— 判据是**两个视图的文案 key 都出现**，
+   而不是只看有没有 dph_seg（排序/数量控件也在用同一套 class）。 */
+check(
+  "tab: 顶部有「严选推荐 / 分类精选」切换",
+  tabHtml.includes("best.recommend") && tabHtml.includes("best.picks"),
+  `recommend=${tabHtml.includes("best.recommend")} picks=${tabHtml.includes("best.picks")}`,
+);
+check("tab: 视图切换默认停在「严选推荐」", /dph_segBtnOn[^>]*>best\.recommend</.test(tabHtml), (tabHtml.match(/<button class="dph_segBtn[^>]*>[^<]*</g) || []).slice(0, 3).join(" | "));
+check("tab: 底部有「显示右下角浮窗」开关（浮窗被隐藏后的第二个恢复入口）", tabHtml.includes("action.showFloat"));
+/* 页签必须订阅共享 store：否则在胶囊/面板里关闭浮窗后，这里的勾选态不跟着变。
+   （clientSource 在下面才定义，这里单独读一次源码。） */
+const srcForTab = fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8");
+check("tab: 订阅了共享 store（勾选态不会与其它入口错位）", /function CatalogView\(\)\s*\{[\s\S]{0,240}?useHub\(\)/.test(srcForTab));
 
 const footHtml = renderToStaticMarkup(react.createElement(registered["sidebar.footer.action"].view, { wide: true }));
 check("footer: wide 时含文字标签", footHtml.includes("dph_lbLabel"), footHtml.slice(0, 90));
@@ -530,6 +543,49 @@ check("clampPos 脏输入不抛错", JSON.stringify(client.clampPos({ right: "x"
 check("client: 胶囊与面板标题都可拖", /dph_pill[\s\S]{0,400}onPointerDown/.test(clientSource) && /dph_panelTitle dph_drag/.test(clientSource));
 check("client: 拖动位移阈值防误触", /DRAG_THRESHOLD = 5/.test(clientSource) && /skipClickRef/.test(clientSource));
 check("client: 位置写入 localStorage", /POS_KEY = "dph-hub-pos"/.test(clientSource) && /storePos\(/.test(clientSource));
+
+/* --- v0.4.4：浮窗可被用户手动关闭 ---
+   隐藏状态是在**模块加载时**从 localStorage 读入的，所以必须重新加载一次模块
+   才能验证真实路径（源码匹配只能证明"写了这段代码"，证明不了"确实这么渲染"）。 */
+function loadFreshClient() {
+  const previousWindow = globalThis.window;
+  let captured = null;
+  globalThis.window = { __ModuleLoader__: { load: (value) => { captured = value; } } };
+  new Function(fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8"))();
+  globalThis.window = previousWindow;
+  return captured.factory((id) => {
+    if (id === "react") return react;
+    throw new Error("unexpected require: " + id);
+  });
+}
+function slotsOf(fresh) {
+  const map = {};
+  fresh.apply({
+    effect: (fn) => fn(),
+    locale: { register: () => ({ dispose() {} }), bind: () => (key) => key },
+    slots: { inject: (name, fn) => fn(), register: (options, view) => { map[options.name] = view; return { dispose() {} }; } },
+  });
+  return map;
+}
+
+localStorage.removeItem("dph-hub-hidden");
+const overlayShown = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["shell.overlay"], {}));
+check("overlay: 未关闭时渲染胶囊", overlayShown.includes("dph_pill"));
+check(
+  "overlay: 胶囊带独立关闭按钮（兄弟节点 —— 嵌进 button 里是非法 HTML，还会触发拖动）",
+  overlayShown.includes("dph_pillClose") && overlayShown.indexOf("dph_pillClose") > overlayShown.indexOf('class="dph_pill"'),
+  overlayShown.slice(0, 170),
+);
+
+localStorage.setItem("dph-hub-hidden", "1");
+const overlayHidden = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["shell.overlay"], {}));
+check("overlay: 手动关闭后整块浮窗不渲染", overlayHidden === "", JSON.stringify(overlayHidden.slice(0, 60)));
+
+check("overlay: 关闭状态落盘（下次进来仍然是关的）", /HIDE_KEY = "dph-hub-hidden"/.test(clientSource) && /storeHidden\(/.test(clientSource));
+check("client: 侧边栏按钮是恢复入口（隐藏时先取消隐藏再打开）", /if \(state\.hidden\) \{[\s\S]{0,60}showHub\("footer"\)/.test(clientSource));
+check("client: 面板底部也给「隐藏浮窗」出口", clientSource.includes('hideHub("panel")'));
+check("client: 关闭动作单独埋点（否则不知道这功能有没有人用）", clientSource.includes('action: "hide"') && clientSource.includes('action: "show"'));
+localStorage.removeItem("dph-hub-hidden");
 
 /* --- 失败信息提取：用真实捕获的 pnpm 输出（不是编造的样例） --- */
 const realPnpmFailure = [
