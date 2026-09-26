@@ -20,6 +20,9 @@
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dsh": {
     "client": {
       "platform": "web",
@@ -35,6 +38,11 @@
     },
     "engines": {
       "dsh": ">=0.1.0-rc.5"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.1.5-rc.3": "compatible"
+      }
     }
   },
   "peerDependencies": {
