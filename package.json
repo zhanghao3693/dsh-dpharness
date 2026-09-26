@@ -1,5 +1,6 @@
 {
   "name": "dsh-dpharness",
+  "icon": "./icon.svg",
   "version": "0.4.4",
   "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a dismissible site-wide floating panel, both offering a searchable full catalog and a monthly by-category shortlist, with one-click install via dshmarket or the dsh CLI. Read-only catalog plus an opt-out telemetry relay covering the full install funnel.",
   "author": "zhanghao3693 <zhanghao3693@qq.com>",
@@ -14,6 +15,7 @@
   "type": "module",
   "main": "lib/index.js",
   "exports": {
+  "./locale/*.json": "./locale/*.json",
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
@@ -43,12 +45,10 @@
       "optional": true
     }
   },
-  "files": [
-    "lib/index.js",
+  "files": ["icon.svg", "locale", "lib/index.js",
     "lib/client.js",
     "README.md",
-    "cordis.patch.yml"
-  ],
+    "cordis.patch.yml"],
   "keywords": [
     "dsh",
     "deepseek-harness",
