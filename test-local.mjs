@@ -525,7 +525,13 @@ check("overlay: 默认收起为胶囊", overlayHtml.includes("dph_pill"), overla
 const clientSource = fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8");
 check("client: 安装优先走 dshmarket 路由", clientSource.includes('"/dsh-market/install"') && clientSource.includes('"/dsh-market/status"'));
 check("client: 降级走自有 host 路由", clientSource.includes('"/api/dpharness/install"'));
-check("client: 400/404 才降级（409 不降级）", /status === 400 \|\| market\.status === 404/.test(clientSource));
+/* 2026-09-30 契约变更：只有 409（有 agent 在跑）不降级；其余一切「市场通道给不出确定答复」
+   的状态都必须降级 —— dshmarket 缺失/被 dsh 判定不兼容而整包跳过时，/dsh-market/* 会整体
+   缺席，POST 落到 dsh 静态前端的 fallback（非 GET/HEAD ⇒ 空体 405）。把它当硬失败会让
+   一键安装在市场不可用时直接报错，而旁边明明有可用的本地通道。 */
+check("client: 只有 409 不降级（busy 仍是硬失败）", /market\.status === 409\) \{/.test(clientSource) && /why: "busy"/.test(clientSource));
+check("client: 旧的「其他状态码一律硬失败」已移除（不再有 market_http）", !/"market_http"/.test(clientSource));
+check("client: 通道不可用要留痕（market_unavailable + http_<status>）", /action: "market_unavailable"/.test(clientSource) && /"http_" \+ market\.status/.test(clientSource));
 check("client: 复制与安装分别埋点", clientSource.includes('"copy_install"') && clientSource.includes('action: "install"'));
 check("client: 安装失败区分阶段与原因", /action: "install_failed", via: "market", why/.test(clientSource) && /why: local\.status === 409 \? "busy" : "local_rejected"/.test(clientSource));
 check("client: 确认框的流向单独埋点", clientSource.includes('action: "install_ask"') && clientSource.includes('action: "install_cancel"'));
