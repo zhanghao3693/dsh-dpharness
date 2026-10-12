@@ -705,6 +705,11 @@ check("client: 批量把「报成功但没变」与失败分开计数", /result\
 check("client: 偶发失败**重试一次**（且只一次，不是循环）", /if \(!done\.ok && done\.why === "cli_exit"\) \{/.test(clientSrcUpd) && (clientSrcUpd.match(/const again = await postJson\(LOCAL_INSTALL/g) || []).length === 1);
 check("client: 重试单独埋点（能看出有多少次是第一把失败的）", clientSrcUpd.includes('why: "retry"'));
 check("client: 目录卡片标出「已安装 vX」（用户不会对着装好的插件反复点安装）", clientSrcUpd.includes('t("card.installed")'));
+check(
+  "client: 已装过的卡片按钮不说「安装」而说「重新安装」（按钮才是用户看的那一处）",
+  clientSrcUpd.includes('t("install.reinstall")') && clientSrcUpd.includes('t("install.reinstallConfirm")')
+    && /idleLabel = upgrading \? t\("updates\.upgrade"\) : item\.installed \? t\("install\.reinstall"\)/.test(clientSrcUpd),
+);
 check("host: 目录下发时补 installed 字段（不进缓存，装完立刻可见）", /function installedOf\(item, map\)/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")));
 
 globalThis.fetch = realFetch;
