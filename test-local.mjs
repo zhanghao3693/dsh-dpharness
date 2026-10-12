@@ -554,13 +554,31 @@ function fixture(name, payload) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(payload));
 }
-fixture("has-dsh-field", { version: "1.2.3", dsh: { bundle: { patch: "./cordis.patch.yml" } } });
+fixture("has-dsh-field", { version: "1.2.3", description: "A tiny dsh plugin", dsh: { bundle: { patch: "./cordis.patch.yml" } } });
 fixture("has-peer-dsh", { version: "2.0.0", peerDependencies: { "@deepseek-ai/dsh": ">=0.1.0" } });
 fixture("plain-lib", { version: "3.0.0", dependencies: { left: "1" } });
-check("readInstalled: 声明了 dsh 字段 → 是插件", JSON.stringify(host.readInstalled("has-dsh-field", fixtureDir)) === JSON.stringify({ version: "1.2.3", plugin: true }), JSON.stringify(host.readInstalled("has-dsh-field", fixtureDir)));
+/* 「这是谁」的两条来源：本机 locale/zh.json（优先）与站点目录（补位）。这里验前者。 */
+function fixtureLocale(name, payload) {
+  const dir = path.join(fixtureDir, "node_modules", name, "locale");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "zh.json"), JSON.stringify(payload));
+}
+fixtureLocale("has-dsh-field", { meta: { title: "模型优惠时钟 (dsh-client-ui-model-clock)", description: "按优惠时段自动切换模型，省着用。" } });
+fixtureLocale("has-peer-dsh", { meta: { title: "Model Clock", description: "English only here" } });
+const installedInfo = host.readInstalled("has-dsh-field", fixtureDir);
+check("readInstalled: 声明了 dsh 字段 → 是插件", installedInfo.version === "1.2.3" && installedInfo.plugin === true, JSON.stringify(installedInfo));
+check("readInstalled: 带上原文描述（中文名缺失时界面拿它兜底并标「未汉化」）", installedInfo.desc === "A tiny dsh plugin", installedInfo.desc);
 check("readInstalled: peerDependencies 命中 @deepseek-ai/dsh → 是插件", host.readInstalled("has-peer-dsh", fixtureDir).plugin === true);
 check("readInstalled: 普通依赖 → 不是插件（按契约判，不按包名猜）", host.readInstalled("plain-lib", fixtureDir).plugin === false);
 check("readInstalled: 读不到 → null（未知，不等于「不是插件」）", host.readInstalled("not-installed-here", fixtureDir) === null);
+
+/* localIdentity：只认包自己声明的中文元数据，读不到就 null —— 不猜、不翻译 */
+const idHit = host.localIdentity("has-dsh-field", fixtureDir);
+check("localIdentity: 取 meta.title 作中文名", !!idHit && idHit.nameZh === "模型优惠时钟", idHit && idHit.nameZh);
+check("localIdentity: 去掉 title 里重复的那截包名（界面另有位置放包名）", !!idHit && !/dsh-client-ui-model-clock/.test(idHit.nameZh), idHit && idHit.nameZh);
+check("localIdentity: 带出中文说明", !!idHit && /省着用/.test(idHit.note), idHit && idHit.note);
+check("localIdentity: 只有英文 title → null（绝不把英文当中文名）", host.localIdentity("has-peer-dsh", fixtureDir) === null, JSON.stringify(host.localIdentity("has-peer-dsh", fixtureDir)));
+check("localIdentity: 没有 locale 目录 → null（不抛错）", host.localIdentity("plain-lib", fixtureDir) === null, JSON.stringify(host.localIdentity("plain-lib", fixtureDir)));
 fs.rmSync(fixtureDir, { recursive: true, force: true });
 
 check(
@@ -575,6 +593,7 @@ const upRoute = mockRes();
 await routes["/api/dpharness/updates"]({ method: "GET", url: "/api/dpharness/updates" }, upRoute);
 const upBody = upRoute.out.body;
 check("updates 路由: 200 且 ok", upRoute.out.status === 200 && !!upBody && upBody.ok === true, "status=" + upRoute.out.status);
+check("updates 路由: 带形状版本号（客户端据此识别「宿主是旧的」）", typeof upBody.rev === "number" && upBody.rev === host.SHAPE_REV, "rev=" + upBody.rev);
 check("updates 路由: self.current 取自代码常量、latest 取自镜像", upBody.self.current === host.VERSION && upBody.self.latest === "9.9.9", JSON.stringify(upBody.self));
 check("updates 路由: 判定有新版本，并给出用本机 profile 拼的升级命令", upBody.self.outdated === true && upBody.self.upgrade === "dsh plugin --profile " + upBody.profile + " add dsh-dpharness@latest", upBody.self.upgrade);
 check("updates 路由: 本插件**不**在已装清单里重复出现（两处都列会让人以为要升两次）", upBody.plugins.every((item) => item.name !== host.PKG_NAME), upBody.plugins.map((item) => item.name).join(","));
@@ -592,6 +611,17 @@ check(
   "updates 路由: 每条都带用本机 profile 拼的升级命令",
   upBody.plugins.every((item) => item.upgrade === "dsh plugin --profile " + upBody.profile + " add " + item.name + "@latest"),
   upBody.plugins[0] && upBody.plugins[0].upgrade,
+);
+check(
+  "updates 路由: 每条都带「这是谁」的两个字段（中文名可能为空，说明一定有来源）",
+  upBody.plugins.every((item) => typeof item.nameZh === "string" && typeof item.note === "string")
+    && typeof upBody.self.nameZh === "string" && typeof upBody.self.note === "string",
+  JSON.stringify({ self: { nameZh: upBody.self.nameZh, note: (upBody.self.note || "").slice(0, 24) }, first: upBody.plugins[0] && { nameZh: upBody.plugins[0].nameZh, note: (upBody.plugins[0].note || "").slice(0, 24) } }),
+);
+check(
+  "updates 路由: 中文名只在这一条里出现中文（英文包名不会被当成中文名）",
+  upBody.plugins.every((item) => !item.nameZh || /[\u4e00-\u9fff]/.test(item.nameZh)),
+  JSON.stringify(upBody.plugins.map((i) => i.nameZh).filter(Boolean).slice(0, 5)),
 );
 const upCached = mockRes();
 await routes["/api/dpharness/updates"]({ method: "GET", url: "/api/dpharness/updates?refresh=1" }, upCached);
@@ -730,9 +760,15 @@ check("client: 降级走自有 host 路由", clientSource.includes('"/api/dpharn
 check("client: 只有 409 不降级（busy 仍是硬失败）", /market\.status === 409\) \{/.test(clientSource) && /why: "busy"/.test(clientSource));
 check("client: 旧的「其他状态码一律硬失败」已移除（不再有 market_http）", !/"market_http"/.test(clientSource));
 check("client: 通道不可用要留痕（market_unavailable + http_<status>）", /action: "market_unavailable"/.test(clientSource) && /"http_" \+ market\.status/.test(clientSource));
-check("client: 复制与安装分别埋点", clientSource.includes('"copy_install"') && clientSource.includes('action: "install"'));
-check("client: 安装失败区分阶段与原因", /action: "install_failed", via: "market", why/.test(clientSource) && /why: local\.status === 409 \? "busy" : "local_rejected"/.test(clientSource));
-check("client: 确认框的流向单独埋点", clientSource.includes('action: "install_ask"') && clientSource.includes('action: "install_cancel"'));
+check("client: 复制与安装分别埋点（升级另设事件名，不混进安装漏斗）", clientSource.includes('"copy_install"') && clientSource.includes('start: "install"') && clientSource.includes('start: "upgrade"'));
+check(
+  "client: 安装失败区分阶段与原因（升级走自己的失败事件名）",
+  /fail: "install_failed"/.test(clientSource)
+    && /fail: "upgrade_failed"/.test(clientSource)
+    && /local\.status === 409 \? "busy" : "local_rejected"/.test(clientSource)
+    && /via: done\.via \|\| "local"/.test(clientSource),
+);
+check("client: 确认框的流向单独埋点（安装与升级各自记账）", /"upgrade_ask" : "install_ask"/.test(clientSource) && /"upgrade_cancel" : "install_cancel"/.test(clientSource));
 check("client: 点击重启即上报（结果靠回执证明）", clientSource.includes('action: "restart_click"') && clientSource.includes('action: "restart_failed"'));
 check("client: 失败原因只发闭集枚举，不发错误原文", !/why: String\(/.test(clientSource) && !/why: done\.message/.test(clientSource));
 
@@ -898,10 +934,25 @@ check(
 check("settings: 设置页含「更新日志」一节（SSR 首屏是加载态）", setPanelHtml.includes("changelog.title") && setPanelHtml.includes("changelog.loading"), setPanelHtml.slice(0, 90));
 check("client: 更新日志读本机 host 的只读接口", clientSource.includes('"/api/dpharness/changelog"'));
 check(
-  "client: 更新日志只在设置页请求（浮窗/页签不顺手拉一遍）",
-  /function SettingsPanel\(\)[\s\S]{0,400}?useChangelog\(\)/.test(clientSource) && (clientSource.match(/useChangelog\(\)/g) || []).length === 2,
-  "useChangelog 出现次数=" + String((clientSource.match(/useChangelog\(\)/g) || []).length) + "（1 处定义 + 1 处调用）",
+  "client: 更新日志只在设置页与「更新」视图两处使用（目录/榜单不顺手拉）",
+  (clientSource.match(/useChangelog\(\)/g) || []).length === 3,
+  "useChangelog 出现次数=" + String((clientSource.match(/useChangelog\(\)/g) || []).length) + "（1 处定义 + 2 处调用）",
 );
+check(
+  "client: 「更新」视图里直接能看到本插件自己的更新日志（不必再跑一趟设置页）",
+  /changelogBlock\(cl\.state\.data \? cl\.state\.data\.entries : null, "upd:"\)/.test(clientSource),
+);
+check("client: 两处日志共用同一份渲染（版本条目只有一种实现）", (clientSource.match(/changelogList\(/g) || []).length === 3, String((clientSource.match(/changelogList\(/g) || []).length) + " 处引用");
+
+/* --- v0.5.0：「宿主比客户端旧」必须显式说出来 ---
+   desktop profile 里本插件是指向工作区的符号链接：客户端刷新即生效，宿主字段要重启才更新。
+   今天已经因为这件事误导过用户两次（一次是 JSON 解析错误，一次是「更新」页缺中文名）。 */
+const hostRev = /export const SHAPE_REV = (\d+);/.exec(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8"));
+const clientRev = /const HOST_SHAPE_REV = (\d+);/.exec(clientSource);
+check("形状版本号两侧都有且**相等**（两个半边同包不同运行时，只能各写一份，靠这条锁住）", !!hostRev && !!clientRev && hostRev[1] === clientRev[1], `host=${hostRev && hostRev[1]} client=${clientRev && clientRev[1]}`);
+check("形状版本号：宿主负载里带上了 rev", /rev: SHAPE_REV/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")));
+check("client: 只判「宿主更旧」，宿主更新时不打扰用户", /body\.rev < HOST_SHAPE_REV/.test(clientSource) && !/body\.rev !== HOST_SHAPE_REV/.test(clientSource));
+check("client: 宿主更旧时给出可操作的一句话（不是让用户以为功能坏了）", clientSource.includes('t("host.skew")') && clientSource.includes('restartButton("skew")'));
 check("client: 只有 outdated === true 才谈升级（未知/已最新不摊命令）", /data\.outdated === true && upgrade/.test(clientSource));
 check("client: 「已是最新」与「查不到」是两句不同的话", clientSource.includes('t("changelog.upToDate")') && /data\.outdated === false/.test(clientSource));
 check("client: 复制升级命令单独埋点", clientSource.includes('action: "upgrade_copy"'));
@@ -977,10 +1028,68 @@ globalThis.fetch = htmlFetch;
 check("client: 四个取数 hook 共用同一个解析器（裸 response.json().then 已全部移除）", !/response\.json\(\)\.then/.test(clientSource));
 check(
   "client: stale 时给「重启 dsh」出口，且要两步确认（重启会掐断当前会话）",
-  /store\.stale[\s\S]{0,1200}?updates\.restartConfirm/.test(clientSource)
-    && clientSource.includes('action: "restart_ask", scope: "stale"')
-    && clientSource.includes('via: "stale"'),
+  clientSource.includes('restartButton("stale")')
+    && clientSource.includes('t("updates.restartConfirm")')
+    && clientSource.includes("if (!restartAsk)")
+    && clientSource.includes('action: "restart_ask", scope: key'),
 );
+
+/* --- v0.5.0：一键升级 / 批量升级 --- */
+check("client: 一键升级复用安装通道（同一个 InstallRow，只换 kind）", /h\(InstallRow, \{ key: "do", item: \{ pkg: String\(item\.name\) \+ "@latest" \}, kind: "upgrade" \}\)/.test(clientSource));
+check(
+  "client: 批量**串行**执行（宿主同一时刻只允许一个安装任务，并发只会拿到 409）",
+  /await runInstall\(\{ pkg: names\[index\] \+ "@latest" \}, t, "upgrade"\)/.test(clientSource) && /for \(let index = 0; index < names\.length/.test(clientSource),
+);
+check("client: 批量可中止，中止后不再往下跑", /if \(hub\.batch && hub\.batch\.stopRequested\) break;/.test(clientSource) && clientSource.includes('action: "upgrade_all_stop"'));
+check("client: 批量完成后给重启出口（本地通道要重启才生效）", clientSource.includes('restartButton("batch")') && clientSource.includes('t("updates.restartNeeded")'));
+check("client: 自插件也算进批量（用户在意的是「一共几个」）", /if \(self\.outdated === true && self\.name\) outgoing\.unshift/.test(clientSource));
+check(
+  "client: 更新行中文名优先，包名退到第二行（用户要认得出这是谁）",
+  /nameZh \|\| String\(item\.name\)/.test(clientSource) && /if \(nameZh\) sub\.push\(String\(item\.name\)\)/.test(clientSource),
+);
+check("client: 缺中文名时标「未汉化」，不假装有中文", /t\("label\.untranslated"\)/.test(clientSource) && /const untranslated = !nameZh/.test(clientSource));
+check(
+  "client: 升级回执用裸包名（带 @latest 去查 profile 清单会永远查不到，把「装上了」记成「没装上」）",
+  /function basePackage\(target\)/.test(clientSource) && /rememberPending\(\{ pkg: basePackage\(target\)/.test(clientSource),
+);
+check("basePackage: 去 @latest", client.basePackage("dsh-context@latest") === "dsh-context", client.basePackage("dsh-context@latest"));
+check("basePackage: scoped 包去 @latest", client.basePackage("@laoyuehanni/dsh-token-usage@latest") === "@laoyuehanni/dsh-token-usage", client.basePackage("@laoyuehanni/dsh-token-usage@latest"));
+check("basePackage: scoped 无版本时原样返回（不能把 scope 的 @ 当成版本分隔符）", client.basePackage("@scope/name") === "@scope/name", client.basePackage("@scope/name"));
+check("basePackage: 带具体版本号也还原成裸名", client.basePackage("dsh-memento@1.2.3") === "dsh-memento", client.basePackage("dsh-memento@1.2.3"));
+check("basePackage: 空值不抛错", client.basePackage(null) === "" && client.basePackage(undefined) === "", JSON.stringify(client.basePackage(null)));
+
+/* --- v0.5.0：dsh 自带的兼容性闸门（用真实捕获的日志做样本） ---
+   2026-10-12 在桌面版 dsh 0.2.0-rc.2 上实际拿到的输出：dsh 会拿目标版本的 peerDependencies
+   跟本机 dsh 比对，不匹配就**硬拒绝**。 */
+const realRejection = [
+  "",
+  'dsh: installation rejected: Plugin dsh-restart@0.1.2 is incompatible with dsh 0.2.0-rc.2: peerDependencies {"@deepseek-ai/dsh-llm":"^0.1.1-rc.2"}. Running it may cause crashes or data loss. Update the plugin or install a plugin version compatible with this dsh runtime. To accept this risk explicitly, grant the exact-version exemption for dsh-restart@0.1.2 on dsh 0.2.0-rc.2 with `dsh plugin allow-version` or the plugin manager, then retry the installation or restart dsh. Exact-version exemption: not active.',
+  "dsh: nothing was installed.",
+].join("\n");
+const rejection = host.incompatibleFrom(realRejection);
+check("兼容性闸门: 识别出被拒的包与版本", !!rejection && rejection.name === "dsh-restart" && rejection.version === "0.1.2", JSON.stringify(rejection));
+check("兼容性闸门: 带出对方的 dsh 版本（界面要说明本机是哪个版本）", !!rejection && rejection.dsh === "0.2.0-rc.2", rejection && rejection.dsh);
+const scopedRejection = host.incompatibleFrom("dsh: installation rejected: Plugin @laoyuehanni/dsh-x@0.4.7 is incompatible with dsh 0.2.0-rc.2: peerDependencies {}");
+check("兼容性闸门: scoped 包不会把 scope 的 @ 当成版本分隔符", !!scopedRejection && scopedRejection.name === "@laoyuehanni/dsh-x" && scopedRejection.version === "0.4.7", JSON.stringify(scopedRejection));
+check("兼容性闸门: 普通安装失败不被误判成闸门拒绝", host.incompatibleFrom("[ERR_PNPM_FETCH_404] GET https://registry.npmjs.org/x: Not Found - 404") === null);
+check(
+  "兼容性闸门: 通用错误提取器确实抓不到它（这正是需要专用解析器的原因）",
+  /nothing was installed/.test(host.errorLineFrom(realRejection)),
+  host.errorLineFrom(realRejection),
+);
+check("兼容性闸门: job 视图带出 why / reject 两个字段（界面据此翻成人话）", (() => {
+  const hostSrc = fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
+  return /why: installJob\.why/.test(hostSrc) && /reject: installJob\.reject/.test(hostSrc);
+})());
+check(
+  "兼容性闸门: 界面把拒绝原因翻成人话（不是一句「失败」）—— 三件事都要给",
+  /format\(t\("updates\.blockedBody"\), \{ spec:[\s\S]{0,120}?dsh:/.test(clientSource)
+    && clientSource.includes('t("updates.blockedHow")')
+    && clientSource.includes('t("updates.copyRaw")'),
+);
+check("兼容性闸门: 被拒的版本记在本机，下次直接标注（不做预判，只记真实发生过的）", /BLOCKED_KEY = "dph-hub-blocked"/.test(clientSource) && /rememberBlocked\(done\.reject\.spec\)/.test(clientSource) && clientSource.includes('t("updates.blocked")'));
+check("兼容性闸门: 批量把「被拦下」与「真失败」分开计数", /if \(result\.why === "incompatible"\) blocked \+= 1;/.test(clientSource) && clientSource.includes('t("updates.batchBlocked")'));
+check("兼容性闸门: 失败原因进闭集埋点（why=incompatible 可单独统计）", /why: done\.why \|\| "unknown"/.test(clientSource));
 
 /* --- 失败信息提取：用真实捕获的 pnpm 输出（不是编造的样例） --- */
 const realPnpmFailure = [
