@@ -1,8 +1,8 @@
 {
   "name": "dsh-dpharness",
   "icon": "./icon.svg",
-  "version": "0.4.4",
-  "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a dismissible site-wide floating panel, both offering a searchable full catalog and a monthly by-category shortlist, with one-click install via dshmarket or the dsh CLI. Read-only catalog plus an opt-out telemetry relay covering the full install funnel.",
+  "version": "0.5.0",
+  "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a dismissible site-wide floating panel, offering a searchable full catalog, a monthly by-category shortlist and a daily pick, with one-click install via dshmarket or the dsh CLI. Includes a settings page (General row + Plugins tab) for the widget visibility, the daily pick and the opt-out telemetry relay covering the full install funnel.",
   "author": "zhanghao3693 <zhanghao3693@qq.com>",
   "repository": {
     "type": "git",
@@ -30,7 +30,8 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
       ]
     },
     "bundle": {
@@ -41,7 +42,8 @@
     },
     "compatibility": {
       "dshReleases": {
-        "0.1.5-rc.3": "compatible"
+        "0.1.5-rc.3": "compatible",
+        "0.2.0-rc.2": "compatible"
       }
     }
   },

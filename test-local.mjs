@@ -95,7 +95,11 @@ globalThis.fetch = async (url, options) => {
       ok: true,
       status: 200,
       json: async () => ({
-        count: 1,
+        // 站点真实契约（2026-09-30 实测 q=统计 → count=30 / total=106）：
+        // count = 本次返回条数，total = 该筛选下的真实命中总数。这里刻意让两者不等，
+        // 用于断言 host 不会拿 count 冒充 total —— 冒充过一次，代价是用户以为搜索没生效。
+        count: 2,
+        total: 106,
         plugins: [
           {
             fullName: "omdsh-dev/DSH-better-sidebar",
@@ -153,6 +157,35 @@ const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.m
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
 check("host: 注册六条路由", Object.keys(routes).length === 6, Object.keys(routes).join(", "));
 
+/* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
+   2026-09-30 用户实测：桌面版下每次安装都失败，错误是
+   "cannot locate the dsh entry point (process.argv[1])"。
+   原因：宿主跑在 Electron 进程里，argv[1] 是 "--expose-internals" 而非脚本路径；
+   且桌面版实际使用 desktop profile，而判定会 fallback 到 "web"（装错地方）。 */
+const REAL_SHELL_EXE = "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness";
+check(
+  "desktop: 从 Electron 可执行路径推出 app 自带 CLI",
+  host.desktopShellCli(REAL_SHELL_EXE, true) === "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
+  String(host.desktopShellCli(REAL_SHELL_EXE, true)),
+);
+check("desktop: 非 Electron 环境绝不猜路径", host.desktopShellCli("/usr/local/bin/node", false) === null);
+check(
+  "desktop: 伪造的 profiles 路径不认（必须是磁盘上真实存在的 profile）",
+  host.profileFromArgv(["/tmp/definitely-not-a-profile/profiles/ghost"]) === null,
+);
+const realProfileArg = path.join(os.homedir(), ".dsh", "profiles", "desktop");
+if (fs.existsSync(path.join(realProfileArg, "package.json"))) {
+  check(
+    "desktop: 从宿主 argv 的 profiles/<name> 推出 profile",
+    host.profileFromArgv([REAL_SHELL_EXE, "--expose-internals", "/x/lib/index.js", "/x/app.asar/dsh", realProfileArg, "/x/runtime"]) === "desktop",
+    String(host.profileFromArgv([realProfileArg])),
+  );
+}
+check(
+  "desktop: argv 无 profiles 路径时返回 null（launchd 版判定不受影响）",
+  host.profileFromArgv(["/usr/local/bin/node", "/Users/x/ws/bin/dsh", "web", "--port", "8787"]) === null,
+);
+
 function mockRes() {
   const out = { status: 0, body: null };
   return {
@@ -187,6 +220,12 @@ check("search: 安装命令形式", sample && /^dsh plugin --profile web add \S+
 check("search: 带出汉化正文 descZh", sample && /开放的侧边栏底座/.test(sample.descZh || ""), sample && sample.descZh);
 check("search: 带出卖点 sell", sample && sample.sell === "已适配 DSH 原生侧边栏 API，右列就是工作台", sample && sample.sell);
 check("search: 分类已译中文", sample && sample.cat === "浏览器", sample && sample.cat);
+
+/* --- 结果总数：必须是上游 total，不是本次返回条数 ---
+   用户报「搜索不生效」的直接原因：以前拿 list.length 当结果数，于是
+   「共 N 条结果」里的 N 恒等于 take（默认 30），搜索前后数字完全不变。 */
+check("search: 透传上游 total（真实命中总数）", res.out.body.total === 106, "total=" + res.out.body.total);
+check("search: count 仍是本次返回条数（两者不可混为一谈）", res.out.body.count === 2, "count=" + res.out.body.count);
 
 /* --- 安装命令口径必须与站点 resolveInstallTarget 一致 --- */
 const repoItem = res.out.body.plugins[1];
@@ -459,10 +498,14 @@ localStorage.setItem("dph-hub-pending", JSON.stringify({ pkg: "dsh-better-sideba
 client.apply(clientCtx);
 await tick();
 const slotNames = Object.keys(registered).sort();
-check("client: 注册三个入口", slotNames.length === 3, slotNames.join(", "));
+/* v0.5.0：入口由 3 个变 5 个 —— 新增的两个是**设置槽位**。
+   它们不是"又一个入口"，而是回答「浮窗被关掉之后从哪儿再打开」的那句话。 */
+check("client: 注册五个入口", slotNames.length === 5, slotNames.join(", "));
 check("client: 含页签", !!registered["conversation.view"]);
 check("client: 含左下入口", !!registered["sidebar.footer.action"]);
 check("client: 含全站浮窗", !!registered["shell.overlay"]);
+check("client: 含「设置 → 通用」的一行（浮窗开关）", !!registered["settings.general.item"]);
+check("client: 含「设置 → 插件」的页签（完整设置页）", !!registered["settings.plugins.tab"]);
 
 /* --- v0.4.2：加载心跳 + 安装后回执（跑的是真实代码路径，不是源码匹配） --- */
 const firstEvents = hubEvents();
@@ -540,6 +583,43 @@ check("client: 失败原因只发闭集枚举，不发错误原文", !/why: Stri
 
 /* --- 浮窗可拖动：位置夹取是纯函数，断言边界 --- */
 check("client: 暴露 clampPos 供测试", typeof client.clampPos === "function");
+
+/* --- 结果总数文案：纯函数单测（「搜索看起来不生效」的修复点） --- */
+const fakeT = (key) => ({ "count.summary": "共 {n} 条结果", "count.partial": "已显示前 {m} 条", "count.searching": "搜索中…" }[key] || key);
+const truncated = { count: 30, total: 106, plugins: new Array(30).fill({}) };
+check(
+  "summaryOf: 命中 106 条但只返回 30 条 → 必须说清被截断",
+  client.summaryOf(truncated, fakeT) === "共 106 条结果 · 已显示前 30 条",
+  client.summaryOf(truncated, fakeT),
+);
+check(
+  "summaryOf: 全部返回时不加多余尾巴",
+  client.summaryOf({ count: 2, total: 2, plugins: [{}, {}] }, fakeT) === "共 2 条结果",
+  client.summaryOf({ count: 2, total: 2, plugins: [{}, {}] }, fakeT),
+);
+check(
+  "summaryOf: 旧 host 没给 total 时退回返回条数（文案仍成立）",
+  client.summaryOf({ count: 30, plugins: new Array(30).fill({}) }, fakeT) === "共 30 条结果",
+  client.summaryOf({ count: 30, plugins: new Array(30).fill({}) }, fakeT),
+);
+check("summaryOf: 空数据不抛错", client.summaryOf(null, fakeT) === "");
+
+/* --- 副标题：搜索时必须给出「点到了」的证据 --- */
+check(
+  "countSub: 重新搜索时标题位让给「搜索中…」（列表保留旧结果显示不动，没有这句就没有反馈）",
+  client.countSub(truncated, fakeT, true, "只推装得上的") === "搜索中…",
+  client.countSub(truncated, fakeT, true, "只推装得上的"),
+);
+check(
+  "countSub: 不搜索时拼上后缀",
+  client.countSub(truncated, fakeT, false, "只推装得上的") === "共 106 条结果 · 已显示前 30 条 · 只推装得上的",
+  client.countSub(truncated, fakeT, false, "只推装得上的"),
+);
+check(
+  "countSub: 尚无数据时只给后缀（首次加载下方已有 loading 提示，不重复）",
+  client.countSub(null, fakeT, true, "只推装得上的") === "只推装得上的",
+);
+check("countSub: 浮窗入口无后缀时为空串", client.countSub(null, fakeT, true) === "");
 const VIEW = { w: 1200, h: 800 };
 const PILL = { w: 150, h: 38 };
 check("clampPos 左上越界 → 夹到边距", JSON.stringify(client.clampPos({ right: -100, bottom: -100 }, PILL, VIEW)) === JSON.stringify({ right: 8, bottom: 8 }), JSON.stringify(client.clampPos({ right: -100, bottom: -100 }, PILL, VIEW)));
@@ -593,6 +673,90 @@ check("client: 面板底部也给「隐藏浮窗」出口", clientSource.include
 check("client: 关闭动作单独埋点（否则不知道这功能有没有人用）", clientSource.includes('action: "hide"') && clientSource.includes('action: "show"'));
 localStorage.removeItem("dph-hub-hidden");
 
+/* --- v0.5.0 每日推荐：选取必须与「自然日」一一对应且当天稳定 ---
+   判据不是"能选出一条"，而是三条最容易写错的不变式：
+     ① 同一天 → 同一条（浮窗、页签、卡片三处调用必须收敛）；
+     ② 上游分组顺序抖动 → 结果不变（不先排序，站点重算榜单当天就会换人）；
+     ③ 跨天 → 会换（否则「每日」是假的）。 */
+const fixedBest = {
+  month: "2026-10",
+  total: 3,
+  categories: [
+    { key: "a", label: "浏览器", subs: [{ key: "s1", label: "侧边栏", items: [
+      { fullName: "o/one", name: "one" },
+      { fullName: "o/two", name: "two" },
+    ] }] },
+    { key: "b", label: "工具", subs: [{ key: "s2", label: "统计", items: [{ fullName: "o/three", name: "three" }] }] },
+  ],
+};
+check(
+  "dailyKey: 按 UTC+8 切日（23:59 仍属前一天）",
+  client.dailyKey(Date.UTC(2026, 9, 11, 15, 59)) === "2026-10-11" && client.dailyKey(Date.UTC(2026, 9, 11, 16, 0)) === "2026-10-12",
+  client.dailyKey(Date.UTC(2026, 9, 11, 15, 59)) + " | " + client.dailyKey(Date.UTC(2026, 9, 11, 16, 0)),
+);
+check("dailyKey: 月/日补零", client.dailyKey(Date.UTC(2026, 0, 5, 4, 0)) === "2026-01-05", client.dailyKey(Date.UTC(2026, 0, 5, 4, 0)));
+const day1 = client.pickDaily(fixedBest, "2026-10-12");
+const day1Bis = client.pickDaily(fixedBest, "2026-10-12");
+check("pickDaily: 同一自然日恒定同一条", !!day1 && !!day1Bis && day1.key === day1Bis.key, day1 && day1.key);
+check("pickDaily: 带出所属大类与小类（卡片要显示它）", !!day1 && !!day1.cat && !!day1.sub, day1 && day1.cat + "/" + day1.sub);
+check(
+  "pickDaily: 上游分组顺序打乱后结果不变（否则站点重算榜单当天就会换人）",
+  (() => {
+    const shuffled = { ...fixedBest, categories: [fixedBest.categories[1], fixedBest.categories[0]] };
+    const again = client.pickDaily(shuffled, "2026-10-12");
+    return !!again && !!day1 && again.key === day1.key;
+  })(),
+  day1 && day1.key,
+);
+const weekKeys = ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"].map((d) => (client.pickDaily(fixedBest, d) || {}).key);
+check("pickDaily: 跨天会换（否则「每日」是假的）", new Set(weekKeys).size > 1, weekKeys.join(" > "));
+check("pickDaily: 空数据/空分组 → null（不抛错）", client.pickDaily(null, "2026-10-12") === null && client.pickDaily({ categories: [] }, "2026-10-12") === null);
+check(
+  "flattenBest: 跳过缺唯一键的脏条目",
+  client.flattenBest({ categories: [{ label: "x", subs: [{ label: "y", items: [{ name: "no-key" }, { fullName: "o/ok" }] }] }] }).length === 1,
+);
+check("client: 选取是确定性的（无随机数）", !/Math\.random/.test(clientSource) && /FNV-1a/.test(clientSource));
+check("client: 时区口径写死 UTC+8（本地时区会让同一天不同地区看到不同一条）", /DAILY_TZ_MS = 8 \* 60 \* 60 \* 1000/.test(clientSource));
+check("client: 没有任何自动展开浮窗的路径（open:true 只来自用户点击）", (clientSource.match(/open: true/g) || []).length === 2, String((clientSource.match(/open: true/g) || []).length));
+check(
+  "client: 设置挂在 dsh 原生槽位上（不自造设置页）",
+  /ctx\.slots\.inject\(\s*"settings\.general\.item"/.test(clientSource) && /ctx\.slots\.inject\(\s*"settings\.plugins\.tab"/.test(clientSource),
+);
+check("client: 每日推荐开关落盘（下次进来仍然是关的）", /DAILY_KEY = "dph-hub-daily"/.test(clientSource) && /storeDaily\(/.test(clientSource));
+
+/* 设置两处的渲染：一个行（通用）一个页（插件页签） */
+const setRowHtml = renderToStaticMarkup(react.createElement(registered["settings.general.item"].view, {}));
+check("settings: 通用行含浮窗开关与说明", setRowHtml.includes("settings.float") && setRowHtml.includes("settings.floatHint"), setRowHtml.slice(0, 110));
+const setPanelHtml = renderToStaticMarkup(react.createElement(registered["settings.plugins.tab"].view, {}));
+check(
+  "settings: 插件页签含三个开关（浮窗 / 每日推荐 / 匿名统计）",
+  setPanelHtml.includes("settings.float") && setPanelHtml.includes("settings.daily") && setPanelHtml.includes("settings.telemetry"),
+  setPanelHtml.slice(0, 110),
+);
+check("settings: 插件页签带「恢复默认」", setPanelHtml.includes("settings.reset") && setPanelHtml.includes("settings.about"));
+check(
+  "settings: 两处开关同源（都订阅共享 store，改一处另一处立刻同步）",
+  /function SettingsFloatRow\(\)\s*\{[\s\S]{0,300}?useHub\(\)/.test(clientSource) && /function SettingsPanel\(\)\s*\{[\s\S]{0,200}?useHub\(\)/.test(clientSource),
+);
+
+/* --- v0.5.0：默认视图顶部要有「今日推荐」，关掉后必须真的消失 ---
+   与浮窗隐藏同一条思路：状态是**模块加载时**从 localStorage 读入的，
+   所以必须重新加载一次模块才能验证真实路径。 */
+check("tab: 视图切换多了「每日推荐」", tabHtml.includes("daily.tab"), tabHtml.includes("daily.tab") ? "有" : "无");
+check(
+  "tab: 默认视图顶部有「今日推荐」卡片（当天唯一一条，不能只在专用视图才出现）",
+  tabHtml.includes("daily.title") && tabHtml.includes("daily.loading"),
+  `title=${tabHtml.includes("daily.title")} loading=${tabHtml.includes("daily.loading")}`,
+);
+localStorage.setItem("dph-hub-daily", "0");
+const tabDailyOff = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["conversation.view"], {}));
+check(
+  "tab: 关掉每日推荐 → 顶部卡片消失、视图切换仍在",
+  !tabDailyOff.includes("daily.title") && tabDailyOff.includes("daily.tab"),
+  `title=${tabDailyOff.includes("daily.title")} tab=${tabDailyOff.includes("daily.tab")}`,
+);
+localStorage.removeItem("dph-hub-daily");
+
 /* --- 失败信息提取：用真实捕获的 pnpm 输出（不是编造的样例） --- */
 const realPnpmFailure = [
   "✓ Lockfile passes supply-chain policies (verified 2m ago)",
@@ -609,6 +773,47 @@ const extracted = host.errorLineFrom(realPnpmFailure);
 check("错误提取：取到 ERR_PNPM 代码行而非泛化描述", /ERR_PNPM_FETCH_404/.test(extracted), extracted);
 check("错误提取：不是那句 This error happened", !/^This error happened/.test(extracted), extracted);
 check("错误提取：空输入不抛错", host.errorLineFrom("") === "", JSON.stringify(host.errorLineFrom("")));
+
+/* --- 脱敏：展示路径不能把 .npmrc 的 token 带出去 ---
+   2026-09-30 用户提出：只换 token 没用，展示路径还在就会被继续带出。
+   用**假** token 做样本（绝不写真 token）。 */
+check(
+  "脱敏: .npmrc 的 _authToken（含 registry 前缀）",
+  host.redactSecrets("//registry.npmjs.org/:_authToken=npm_FAKEFAKEFAKEFAKE1234567890") === "//registry.npmjs.org/:_authToken=***",
+  host.redactSecrets("//registry.npmjs.org/:_authToken=npm_FAKEFAKEFAKEFAKE1234567890"),
+);
+check(
+  "脱敏: pnpm 的 Bearer 行（实测就是这个形状）",
+  host.redactSecrets("An authorization header was used: Bearer npm_FAKEFAKEFAKEFAKE1234567890") ===
+    "An authorization header was used: Bearer ***",
+  host.redactSecrets("An authorization header was used: Bearer npm_FAKEFAKEFAKEFAKE1234567890"),
+);
+check(
+  "脱敏: 裸 npm_ token（没有字段名也要拦）",
+  !host.redactSecrets("token npm_FAKEFAKEFAKEFAKE1234567890 leaked").includes("FAKEFAKEFAKEFAKE"),
+);
+check(
+  "脱敏: _password / NPM_TOKEN 等变体",
+  host.redactSecrets("_password=hunter2") === "_password=***" && !host.redactSecrets("NPM_TOKEN=abc123").includes("abc123"),
+  host.redactSecrets("NPM_TOKEN=abc123"),
+);
+check(
+  "脱敏: 正常的错误行不受影响（不能把诊断信息一起吃掉）",
+  host.redactSecrets("[ERR_PNPM_FETCH_404] GET https://registry.npmjs.org/x: Not Found - 404") ===
+    "[ERR_PNPM_FETCH_404] GET https://registry.npmjs.org/x: Not Found - 404",
+);
+check("脱敏: 空值/undefined 不抛错", host.redactSecrets(undefined) === "" && host.redactSecrets(null) === "");
+check(
+  "脱敏: pnpm 自带的半遮形式（npm_[hidden]）也归一为 ***",
+  host.redactSecrets("An authorization header was used: Bearer npm_[hidden]") === "An authorization header was used: Bearer ***",
+  host.redactSecrets("An authorization header was used: Bearer npm_[hidden]"),
+);
+/* 先截断后脱敏：只要 token 完整出现在可见窗口内，就必须被完整替换 */
+const longNoise = "x".repeat(570);
+check(
+  "脱敏: 截断与脱敏的顺序正确（token 落在 600 字窗口里要被完整替换）",
+  !host.redactSecrets(longNoise + " _authToken=npm_FAKEFAKEFAKEFAKE1234567890").includes("FAKEFAKEFAKEFAKE"),
+);
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
 process.exit(failures === 0 ? 0 : 1);
