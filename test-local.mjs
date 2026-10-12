@@ -1124,6 +1124,10 @@ check(
   "client: 批量**串行**执行（宿主同一时刻只允许一个安装任务，并发只会拿到 409）",
   /await runInstall\(\{ pkg: items\[index\]\.pkg \}, t, "upgrade"\)/.test(clientSource) && /for \(let index = 0; index < items\.length/.test(clientSource),
 );
+check(
+  "client: 批量升级要**两步确认**（一次会改十几个包，一键直落对真实用户太危险）",
+  clientSrcUpd.includes('t("updates.upgradeAllConfirm")') && /if \(!batchAsk\) \{[\s\S]{0,120}?setBatchAsk\(true\)/.test(clientSrcUpd),
+);
 check("client: 批量可中止，中止后不再往下跑", /if \(hub\.batch && hub\.batch\.stopRequested\) break;/.test(clientSource) && clientSource.includes('action: "upgrade_all_stop"'));
 check("client: 批量完成后给重启出口（本地通道要重启才生效）", clientSource.includes('restartButton("batch")') && clientSource.includes('t("updates.restartNeeded")'));
 check("client: 自插件也算进批量（用户在意的是「一共几个」）", /if \(self\.outdated === true && self\.name\) outgoing\.unshift/.test(clientSource));
