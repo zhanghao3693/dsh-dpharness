@@ -674,7 +674,28 @@ check("client: 精确锁定的行标出来并说明原因", clientSrcUpd.include
 check("client: 本地链接单列并说清「为什么不在列表里」", clientSrcUpd.includes('t("updates.locals")') && clientSrcUpd.includes('t("updates.localsNote")'));
 check("client: 装完刷新清单（否则行上还是旧版本号，用户判定「升级没成功」）", /loadUpdates\(true\);/.test(clientSrcUpd) && (clientSrcUpd.match(/loadUpdates\(true\)/g) || []).length >= 3);
 check("host: 安装成功后作废更新缓存（否则刷新拿到的还是装之前那份清单）", /updatesCache = \{ at: 0, value: null \};/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")));
-check("client: 装成但版本没变要说明（清单写死/本地链接的包挪不动）", clientSrcUpd.includes('t("updates.noChange")') && /job\.from === item\.current/.test(clientSrcUpd));
+check(
+  "client: 退出码 0 不等于装上了 —— 版本没变要如实报（报「已安装」是撒谎）",
+  clientSrcUpd.includes('t("updates.noChangeTitle")') && clientSrcUpd.includes('t("updates.noChange")') && /job\.changed !== false/.test(clientSrcUpd),
+);
+check(
+  "host: 装完由 host 亲自读磁盘比对版本（changed = 装前 !== 装后）",
+  (() => {
+    const hostSrc = fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
+    return /installJob\.after = installedVersionOf\(installJob\.pkg\)/.test(hostSrc)
+      && /installJob\.changed = installJob\.before !== installJob\.after/.test(hostSrc)
+      && /changed: installJob\.changed/.test(hostSrc);
+  })(),
+);
+check(
+  "stripVersion: @latest / @版本 后缀被剥掉（scoped 包取最后一个 @）",
+  host.stripVersion("dsh-context@latest") === "dsh-context"
+    && host.stripVersion("@laoyuehanni/dsh-x@0.4.7") === "@laoyuehanni/dsh-x"
+    && host.stripVersion("@scope/name") === "@scope/name"
+    && host.stripVersion("dsh-mnemon") === "dsh-mnemon",
+  host.stripVersion("@laoyuehanni/dsh-x@0.4.7"),
+);
+check("client: 批量把「报成功但没变」与失败分开计数", /result\.changed === false/.test(clientSrcUpd) && clientSrcUpd.includes('t("updates.batchNoop")'));
 
 globalThis.fetch = realFetch;
 
