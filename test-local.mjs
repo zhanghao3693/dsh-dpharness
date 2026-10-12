@@ -956,7 +956,12 @@ const overlayHidden = renderToStaticMarkup(react.createElement(slotsOf(loadFresh
 check("overlay: 手动关闭后整块浮窗不渲染", overlayHidden === "", JSON.stringify(overlayHidden.slice(0, 60)));
 
 check("overlay: 关闭状态落盘（下次进来仍然是关的）", /HIDE_KEY = "dph-hub-hidden"/.test(clientSource) && /storeHidden\(/.test(clientSource));
-check("client: 侧边栏按钮是恢复入口（隐藏时先取消隐藏再打开）", /if \(state\.hidden\) \{[\s\S]{0,60}showHub\("footer"\)/.test(clientSource));
+check(
+  "client: 侧边栏按钮只恢复显示、**不强行展开面板**（用户反馈：每点一次浮窗就自动打开）",
+  /if \(state\.hidden\) \{[\s\S]{0,160}setFloatVisible\(true, "footer"\)/.test(clientSource) && !/showHub/.test(clientSource),
+);
+check("client: 主动展开面板的入口**只剩右下角胶囊**（唯一且用户看得见）", (clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length === 1, String((clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length) + " 处");
+check("client: 隐藏态的按钮文案说准（「显示浮窗」而不是模糊的「打开」）", clientSource.includes('t(state.hidden ? "action.show" : "action.open")') && clientSource.includes('"action.show":'));
 check("client: 面板底部也给「隐藏浮窗」出口", clientSource.includes('hideHub("panel")'));
 check("client: 关闭动作单独埋点（否则不知道这功能有没有人用）", clientSource.includes('action: "hide"') && clientSource.includes('action: "show"'));
 localStorage.removeItem("dph-hub-hidden");
@@ -1005,7 +1010,11 @@ check(
 );
 check("client: 选取是确定性的（无随机数）", !/Math\.random/.test(clientSource) && /FNV-1a/.test(clientSource));
 check("client: 时区口径写死 UTC+8（本地时区会让同一天不同地区看到不同一条）", /DAILY_TZ_MS = 8 \* 60 \* 60 \* 1000/.test(clientSource));
-check("client: 没有任何自动展开浮窗的路径（open:true 只来自用户点击）", (clientSource.match(/open: true/g) || []).length === 2, String((clientSource.match(/open: true/g) || []).length));
+check(
+  "client: 没有任何自动展开浮窗的路径（open:true 只剩胶囊那一处，且来自用户点击）",
+  (clientSource.match(/open: true/g) || []).length === 1 && /setHub\(\{ open: true \}\);\n\t+track\("plugin_hub", \{ action: "open", scope: "overlay" \}\)/.test(clientSource),
+  String((clientSource.match(/open: true/g) || []).length) + " 处",
+);
 check(
   "client: 设置挂在 dsh 原生槽位上（不自造设置页）",
   /ctx\.slots\.inject\(\s*"settings\.general\.item"/.test(clientSource) && /ctx\.slots\.inject\(\s*"settings\.plugins\.tab"/.test(clientSource),
