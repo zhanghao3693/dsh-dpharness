@@ -603,7 +603,11 @@ const upBody = upRoute.out.body;
 check("updates 路由: 200 且 ok", upRoute.out.status === 200 && !!upBody && upBody.ok === true, "status=" + upRoute.out.status);
 check("updates 路由: 带形状版本号（客户端据此识别「宿主是旧的」）", typeof upBody.rev === "number" && upBody.rev === host.SHAPE_REV, "rev=" + upBody.rev);
 check("updates 路由: self.current 取自代码常量、latest 取自镜像", upBody.self.current === host.VERSION && upBody.self.latest === "9.9.9", JSON.stringify(upBody.self));
-check("updates 路由: 判定有新版本，并给出用本机 profile 拼的升级命令", upBody.self.outdated === true && upBody.self.upgrade === "dsh plugin --profile " + upBody.profile + " add dsh-dpharness@latest", upBody.self.upgrade);
+check(
+  "updates 路由: 判定有新版本，并给出用本机 profile + **具体版本号** 拼的升级命令（@latest 在 dsh 上会空转）",
+  upBody.self.outdated === true && upBody.self.upgrade === "dsh plugin --profile " + upBody.profile + " add dsh-dpharness@9.9.9",
+  upBody.self.upgrade,
+);
 check("updates 路由: 本插件**不**在已装清单里重复出现（两处都列会让人以为要升两次）", upBody.plugins.every((item) => item.name !== host.PKG_NAME), upBody.plugins.map((item) => item.name).join(","));
 check(
   "updates 路由: 镜像查不到的包 → outdated=null（绝不能写成 false「已是最新」）",
@@ -1101,10 +1105,13 @@ check(
 );
 
 /* --- v0.5.0：一键升级 / 批量升级 --- */
-check("client: 一键升级复用安装通道（同一个 InstallRow，只换 kind；并带上当前版本以便识别「装完没变」）", /h\(InstallRow, \{ key: "do", item: \{ pkg: String\(item\.name\) \+ "@latest", current: item\.current \}, kind: "upgrade" \}\)/.test(clientSource));
+check(
+  "client: 一键升级复用安装通道，且目标用**具体版本号**（同一个 InstallRow，只换 kind）",
+  /h\(InstallRow, \{ key: "do", item: \{ pkg: String\(item\.name\) \+ "@" \+ String\(item\.latest\), current: item\.current \}, kind: "upgrade" \}\)/.test(clientSource),
+);
 check(
   "client: 批量**串行**执行（宿主同一时刻只允许一个安装任务，并发只会拿到 409）",
-  /await runInstall\(\{ pkg: names\[index\] \+ "@latest" \}, t, "upgrade"\)/.test(clientSource) && /for \(let index = 0; index < names\.length/.test(clientSource),
+  /await runInstall\(\{ pkg: items\[index\]\.pkg \}, t, "upgrade"\)/.test(clientSource) && /for \(let index = 0; index < items\.length/.test(clientSource),
 );
 check("client: 批量可中止，中止后不再往下跑", /if \(hub\.batch && hub\.batch\.stopRequested\) break;/.test(clientSource) && clientSource.includes('action: "upgrade_all_stop"'));
 check("client: 批量完成后给重启出口（本地通道要重启才生效）", clientSource.includes('restartButton("batch")') && clientSource.includes('t("updates.restartNeeded")'));
