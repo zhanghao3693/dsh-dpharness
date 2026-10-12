@@ -683,6 +683,15 @@ check(
   clientSrcUpd.includes('t("updates.noChangeTitle")') && clientSrcUpd.includes('t("updates.alreadyTitle")')
     && /job\.outcome \|\| \(job\.changed === false \? "same"/.test(clientSrcUpd),
 );
+check(
+  "client: 设置页有「自动检查插件更新」开关（有真实用户后必须可关）",
+  clientSrcUpd.includes('"settings.check":') && clientSrcUpd.includes('"settings.checkHint":') && /switchRow\("check", "settings\.check", "settings\.checkHint", state\.autoCheck/.test(clientSrcUpd),
+);
+check(
+  "client: 关掉后不自动查（红点随之不亮），手动「检查更新」仍可用",
+  /if \(hub\.autoCheck\) loadUpdates\(false\);/.test(clientSrcUpd) && clientSrcUpd.includes('AUTO_CHECK_KEY = "dph-hub-auto-check"'),
+);
+check("client: 「恢复默认」把自动检查一并复位（它是偏好，不是「看过了」）", /localStorage\.removeItem\(AUTO_CHECK_KEY\)/.test(clientSrcUpd) && /hidden: false, daily: true, autoCheck: true/.test(clientSrcUpd));
 check("client: 「已安装」只在 changed 时才提示重启（same 无需重启）", /needsRestart = outcome === "changed" && job\.phase === "okLocal"/.test(clientSrcUpd));
 check(
   "host: 装完由 host 亲自读磁盘比对版本（changed = 装前 !== 装后）",
