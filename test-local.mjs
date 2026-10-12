@@ -36,9 +36,11 @@ function check(name, ok, detail) {
 /* ---------------------------------------------------------------- host half */
 /* 拦截 host 发出的对外请求，断言转发载荷是否符合站点端点的真实契约。 */
 const sent = [];
-/* 更新日志的两个外部上游（默认「都没有」—— 与 2026-10-12 的线上实况一致：
-   仓库没有 Release、离线场景 npm 也查不到）。逐个场景再按需改。 */
-let changelogUpstream = { releases: [], latest: null };
+/* 更新日志/更新检查的两个外部上游：
+   · releases 默认空数组（与 2026-10-12 的线上实况一致：仓库没有发过 Release）；
+   · npm 版本用一张表控制，**不在表里 = 镜像查不到（404）** —— 这是"查不到"三态的来源。 */
+let changelogUpstream = { releases: [] };
+const npmVersions = new Map();
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, options) => {
   sent.push({ url: String(url), options });
@@ -48,8 +50,9 @@ globalThis.fetch = async (url, options) => {
   }
   /* npm 最新版（npmmirror）：查不到时返回非 200，host 必须降级成 null 而不是编一个版本号 */
   if (String(url).includes("registry.npmmirror.com/")) {
-    if (changelogUpstream.latest === null) return { ok: false, status: 404, json: async () => ({}) };
-    return { ok: true, status: 200, json: async () => ({ version: changelogUpstream.latest }) };
+    const name = decodeURIComponent(String(url).replace("https://registry.npmmirror.com/", "").replace(/\/latest$/, ""));
+    if (!npmVersions.has(name)) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ version: npmVersions.get(name) }) };
   }
   // 「分类精选」上游（站点 GET /api/best）：结构与真实接口一致（大类→小类→条目）
   if (String(url).includes("/api/best")) {
@@ -167,7 +170,7 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册七条路由", Object.keys(routes).length === 7, Object.keys(routes).join(", "));
+check("host: 注册八条路由", Object.keys(routes).length === 8, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -392,7 +395,7 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出七条路由", metaRoutes.out.body.routes.length === 7, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出八条路由", metaRoutes.out.body.routes.length === 8, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
@@ -517,8 +520,8 @@ check("changelog 路由: 非 GET → 405", cl405.out.status === 405, "status=" +
    结果是 5 分钟缓存的，同一实例里第二次调用只会拿到上一次的缓存，那会掩盖真实分支。 */
 changelogUpstream = {
   releases: [{ tag_name: "v0.5.1", published_at: "2026-10-20T00:00:00Z", name: "0.5.1", body: "- 远端发布说明", draft: false }],
-  latest: "0.5.1",
 };
+npmVersions.set("dsh-dpharness", "0.5.1");
 const hostFresh = await import("./lib/index.js?fresh=changelog");
 const routesFresh = {};
 hostFresh.apply({
@@ -531,7 +534,72 @@ const clFreshBody = clFresh.out.body;
 check("changelog 路由: 有 Release → source=builtin+github", clFreshBody.source === "builtin+github", clFreshBody.source);
 check("changelog 路由: npm 有更高版本 → outdated=true 且带出该版本号", clFreshBody.outdated === true && clFreshBody.latest === "0.5.1", JSON.stringify({ outdated: clFreshBody.outdated, latest: clFreshBody.latest }));
 check("changelog 路由: 远端同版本覆盖内置正文", (clFreshBody.entries[0].items || []).includes("远端发布说明"), JSON.stringify(clFreshBody.entries[0].items));
-changelogUpstream = { releases: [], latest: null };
+changelogUpstream = { releases: [] };
+npmVersions.clear();
+
+/* --- v0.5.0：已装插件的更新检查（host 侧） ---
+   这条路由读的是**真实 profile**（本机 24 个依赖），所以只断言结构不变式与三态纪律，
+   不断言具体包名/条数 —— 换台机器也必须成立。 */
+check(
+  "pluginCandidates: 从 dependencies 取并标 bundled；空输入不抛错",
+  JSON.stringify(host.pluginCandidates(null)) === "[]"
+    && JSON.stringify(host.pluginCandidates({ dependencies: { b: "1", a: "1" }, dsh: { profile: { bundles: ["a"] } } })) === JSON.stringify([{ name: "a", bundled: true }, { name: "b", bundled: false }]),
+  JSON.stringify(host.pluginCandidates({ dependencies: { b: "1", a: "1" }, dsh: { profile: { bundles: ["a"] } } })),
+);
+
+/* readInstalled 用一次性 fixture 目录验：判据是**插件契约**，不能靠本机碰巧装了什么来覆盖 */
+const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-upd-"));
+function fixture(name, payload) {
+  const dir = path.join(fixtureDir, "node_modules", name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(payload));
+}
+fixture("has-dsh-field", { version: "1.2.3", dsh: { bundle: { patch: "./cordis.patch.yml" } } });
+fixture("has-peer-dsh", { version: "2.0.0", peerDependencies: { "@deepseek-ai/dsh": ">=0.1.0" } });
+fixture("plain-lib", { version: "3.0.0", dependencies: { left: "1" } });
+check("readInstalled: 声明了 dsh 字段 → 是插件", JSON.stringify(host.readInstalled("has-dsh-field", fixtureDir)) === JSON.stringify({ version: "1.2.3", plugin: true }), JSON.stringify(host.readInstalled("has-dsh-field", fixtureDir)));
+check("readInstalled: peerDependencies 命中 @deepseek-ai/dsh → 是插件", host.readInstalled("has-peer-dsh", fixtureDir).plugin === true);
+check("readInstalled: 普通依赖 → 不是插件（按契约判，不按包名猜）", host.readInstalled("plain-lib", fixtureDir).plugin === false);
+check("readInstalled: 读不到 → null（未知，不等于「不是插件」）", host.readInstalled("not-installed-here", fixtureDir) === null);
+fs.rmSync(fixtureDir, { recursive: true, force: true });
+
+check(
+  "sortUpdates: 可升级 → 未知 → 已最新，同组按包名",
+  host.sortUpdates([{ name: "b", outdated: false }, { name: "a", outdated: null }, { name: "c", outdated: true }]).map((e) => e.name).join("") === "cab",
+  host.sortUpdates([{ name: "b", outdated: false }, { name: "a", outdated: null }, { name: "c", outdated: true }]).map((e) => e.name + ":" + e.outdated).join(", "),
+);
+
+/* 路由：只让镜像认得本插件 → self 可判定，已装插件全部落在「查不到」而不是「已最新」 */
+npmVersions.set("dsh-dpharness", "9.9.9");
+const upRoute = mockRes();
+await routes["/api/dpharness/updates"]({ method: "GET", url: "/api/dpharness/updates" }, upRoute);
+const upBody = upRoute.out.body;
+check("updates 路由: 200 且 ok", upRoute.out.status === 200 && !!upBody && upBody.ok === true, "status=" + upRoute.out.status);
+check("updates 路由: self.current 取自代码常量、latest 取自镜像", upBody.self.current === host.VERSION && upBody.self.latest === "9.9.9", JSON.stringify(upBody.self));
+check("updates 路由: 判定有新版本，并给出用本机 profile 拼的升级命令", upBody.self.outdated === true && upBody.self.upgrade === "dsh plugin --profile " + upBody.profile + " add dsh-dpharness@latest", upBody.self.upgrade);
+check("updates 路由: 本插件**不**在已装清单里重复出现（两处都列会让人以为要升两次）", upBody.plugins.every((item) => item.name !== host.PKG_NAME), upBody.plugins.map((item) => item.name).join(","));
+check(
+  "updates 路由: 镜像查不到的包 → outdated=null（绝不能写成 false「已是最新」）",
+  upBody.plugins.every((item) => item.outdated === null),
+  "已装插件 " + upBody.plugins.length + " 个：" + JSON.stringify(upBody.plugins.slice(0, 3)),
+);
+check(
+  "updates 路由: counts 自洽",
+  upBody.counts.checked === upBody.plugins.length && upBody.counts.unknown === upBody.counts.checked && upBody.counts.installed >= upBody.counts.checked,
+  JSON.stringify(upBody.counts),
+);
+check(
+  "updates 路由: 每条都带用本机 profile 拼的升级命令",
+  upBody.plugins.every((item) => item.upgrade === "dsh plugin --profile " + upBody.profile + " add " + item.name + "@latest"),
+  upBody.plugins[0] && upBody.plugins[0].upgrade,
+);
+const upCached = mockRes();
+await routes["/api/dpharness/updates"]({ method: "GET", url: "/api/dpharness/updates?refresh=1" }, upCached);
+check("updates 路由: 连点「检查更新」在 30 秒内只放行一次（缓存可以绕，镜像不能被打爆）", upCached.out.body.cached === true, String(upCached.out.body.cached));
+const up405 = mockRes();
+await routes["/api/dpharness/updates"]({ method: "POST", url: "/api/dpharness/updates" }, up405);
+check("updates 路由: 非 GET → 405", up405.out.status === 405, "status=" + up405.out.status);
+npmVersions.delete("dsh-dpharness");
 
 globalThis.fetch = realFetch;
 
@@ -838,6 +906,24 @@ check("client: 只有 outdated === true 才谈升级（未知/已最新不摊命
 check("client: 「已是最新」与「查不到」是两句不同的话", clientSource.includes('t("changelog.upToDate")') && /data\.outdated === false/.test(clientSource));
 check("client: 复制升级命令单独埋点", clientSource.includes('action: "upgrade_copy"'));
 check("client: 只在确实有新版本时上报（把「已最新」也报进来会撑大分母）", /if \(result\.body\.outdated === true\) \{/.test(clientSource));
+
+/* --- v0.5.0：更新检查 + 红点 --- */
+check("tab: 视图切换多了「更新」", tabHtml.includes("updates.tab"), tabHtml.includes("updates.tab") ? "有" : "无");
+check("client: 更新检查读本机 host 的只读接口", clientSource.includes('"/api/dpharness/updates"'));
+check("client: 更新结果是模块级共享 store（三处红点 + 视图共用一次请求）", /const updates = \{ loading/.test(clientSource) && /function useUpdates\(\)/.test(clientSource));
+check(
+  "client: 红点挂在预期的地方（侧边栏 1 + 胶囊 1 + 设置页「更新日志」加载态/就绪态各 1 = 4）",
+  (clientSource.match(/pending\.fresh \? updateDot\(\) : null/g) || []).length === 4,
+  "出现 " + String((clientSource.match(/pending\.fresh \? updateDot\(\) : null/g) || []).length) + " 次",
+);
+check("client: 侧边栏按钮负责首次触发（它始终挂着，红点因此不必先打开任何页面）", /function FooterEntry\(props\)[\s\S]{0,500}?useUpdates\(\)/.test(clientSource));
+check("client: 红点带视觉隐藏文案（只有颜色，对读屏用户等于不存在）", clientSource.includes("dph_sr") && clientSource.includes("function updateDot()"));
+check("client: 看过即消 —— 打开「更新」视图时记下已确认的版本", /if \(data\) ackUpdates\(scope\)/.test(clientSource));
+check("client: 已确认版本落盘（下次进来不重复打扰）", /ACK_KEY = "dph-hub-updates-acked"/.test(clientSource) && /storeAcked\(/.test(clientSource));
+check("client: 红点判据是「签名变化」而不是「存在更新」", /function updateSignature\(data\)/.test(clientSource) && /signature !== updates\.acked/.test(clientSource));
+check("client: 检查失败要显式报错（一份空清单会被界面读成「全都已是最新」）", clientSource.includes('t("updates.failed")'));
+check("client: 「恢复默认」不清红点确认标记（否则刚关掉的红点立刻又亮）", /updates\.acked/.test(clientSource) && !/function resetPrefs\(scope\) \{[\s\S]{0,600}?ACK_KEY/.test(clientSource));
+check("client: 本插件的升级命令只出现一次（不重复列出自己）", /updates\.self/.test(clientSource));
 
 /* --- v0.5.0：默认视图顶部要有「今日推荐」，关掉后必须真的消失 ---
    与浮窗隐藏同一条思路：状态是**模块加载时**从 localStorage 读入的，
