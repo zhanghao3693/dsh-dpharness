@@ -700,6 +700,8 @@ check(
   host.stripVersion("@laoyuehanni/dsh-x@0.4.7"),
 );
 check("client: 批量把「报成功但没变」与失败分开计数", /result\.changed === false/.test(clientSrcUpd) && clientSrcUpd.includes('t("updates.batchNoop")'));
+check("client: 偶发失败**重试一次**（且只一次，不是循环）", /if \(!done\.ok && done\.why === "cli_exit"\) \{/.test(clientSrcUpd) && (clientSrcUpd.match(/const again = await postJson\(LOCAL_INSTALL/g) || []).length === 1);
+check("client: 重试单独埋点（能看出有多少次是第一把失败的）", clientSrcUpd.includes('why: "retry"'));
 
 globalThis.fetch = realFetch;
 
