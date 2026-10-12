@@ -679,16 +679,18 @@ check("client: 本地链接单列并说清「为什么不在列表里」", clien
 check("client: 装完刷新清单（否则行上还是旧版本号，用户判定「升级没成功」）", /loadUpdates\(true\);/.test(clientSrcUpd) && (clientSrcUpd.match(/loadUpdates\(true\)/g) || []).length >= 3);
 check("host: 安装成功后作废更新缓存（否则刷新拿到的还是装之前那份清单）", /updatesCache = \{ at: 0, value: null \};/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")));
 check(
-  "client: 退出码 0 不等于装上了 —— 版本没变要如实报（报「已安装」是撒谎）",
-  clientSrcUpd.includes('t("updates.noChangeTitle")') && clientSrcUpd.includes('t("updates.noChange")') && /job\.changed !== false/.test(clientSrcUpd),
+  "client: 三态如实报 —— changed 装上 / same **本来就是这版**（是成功）/ none 什么都没发生",
+  clientSrcUpd.includes('t("updates.noChangeTitle")') && clientSrcUpd.includes('t("updates.alreadyTitle")')
+    && /job\.outcome \|\| \(job\.changed === false \? "same"/.test(clientSrcUpd),
 );
+check("client: 「已安装」只在 changed 时才提示重启（same 无需重启）", /needsRestart = outcome === "changed" && job\.phase === "okLocal"/.test(clientSrcUpd));
 check(
   "host: 装完由 host 亲自读磁盘比对版本（changed = 装前 !== 装后）",
   (() => {
     const hostSrc = fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
     return /installJob\.after = installedVersionOf\(installJob\.pkg\)/.test(hostSrc)
-      && /installJob\.changed = installJob\.before !== installJob\.after/.test(hostSrc)
-      && /changed: installJob\.changed/.test(hostSrc);
+      && /installJob\.outcome = installJob\.before === null && installJob\.after === null/.test(hostSrc)
+      && /outcome: installJob\.outcome/.test(hostSrc);
   })(),
 );
 check(
@@ -702,6 +704,8 @@ check(
 check("client: 批量把「报成功但没变」与失败分开计数", /result\.changed === false/.test(clientSrcUpd) && clientSrcUpd.includes('t("updates.batchNoop")'));
 check("client: 偶发失败**重试一次**（且只一次，不是循环）", /if \(!done\.ok && done\.why === "cli_exit"\) \{/.test(clientSrcUpd) && (clientSrcUpd.match(/const again = await postJson\(LOCAL_INSTALL/g) || []).length === 1);
 check("client: 重试单独埋点（能看出有多少次是第一把失败的）", clientSrcUpd.includes('why: "retry"'));
+check("client: 目录卡片标出「已安装 vX」（用户不会对着装好的插件反复点安装）", clientSrcUpd.includes('t("card.installed")'));
+check("host: 目录下发时补 installed 字段（不进缓存，装完立刻可见）", /function installedOf\(item, map\)/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")));
 
 globalThis.fetch = realFetch;
 
