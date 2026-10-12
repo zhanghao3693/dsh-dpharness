@@ -691,6 +691,13 @@ check(
   "client: 关掉后不自动查（红点随之不亮），手动「检查更新」仍可用",
   /if \(hub\.autoCheck\) loadUpdates\(false\);/.test(clientSrcUpd) && clientSrcUpd.includes('AUTO_CHECK_KEY = "dph-hub-auto-check"'),
 );
+check(
+  "client: 窄面板里今日推荐默认收起（否则它会挤掉整个结果区 —— 用户实测反馈）",
+  /const \[dailyOpen, setDailyOpen\] = react\.useState\(false\);/.test(clientSrcUpd)
+    && /collapsed: !dailyOpen, toggle: \(\) => setDailyOpen/.test(clientSrcUpd),
+);
+check("client: 只收窄面板、页签（整页）保持展开（整页不存在遮挡问题）", (clientSrcUpd.match(/collapsed: !dailyOpen/g) || []).length === 1, String((clientSrcUpd.match(/collapsed: !dailyOpen/g) || []).length) + " 处");
+check("client: 收起态仍写清「今天是谁」，并可展开/收起", clientSrcUpd.includes('"daily.expand":') && clientSrcUpd.includes('"daily.collapse":') && /t\(opts\.collapsed \? "daily\.expand" : "daily\.collapse"\)/.test(clientSrcUpd));
 check("client: 「恢复默认」把自动检查一并复位（它是偏好，不是「看过了」）", /localStorage\.removeItem\(AUTO_CHECK_KEY\)/.test(clientSrcUpd) && /hidden: false, daily: true, autoCheck: true/.test(clientSrcUpd));
 check("client: 「已安装」只在 changed 时才提示重启（same 无需重启）", /needsRestart = outcome === "changed" && job\.phase === "okLocal"/.test(clientSrcUpd));
 check(
