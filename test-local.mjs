@@ -541,11 +541,19 @@ npmVersions.clear();
    这条路由读的是**真实 profile**（本机 24 个依赖），所以只断言结构不变式与三态纪律，
    不断言具体包名/条数 —— 换台机器也必须成立。 */
 check(
-  "pluginCandidates: 从 dependencies 取并标 bundled；空输入不抛错",
+  "pluginCandidates: 从 dependencies 取，并带出 bundled 与 spec（spec 决定能不能升）",
   JSON.stringify(host.pluginCandidates(null)) === "[]"
-    && JSON.stringify(host.pluginCandidates({ dependencies: { b: "1", a: "1" }, dsh: { profile: { bundles: ["a"] } } })) === JSON.stringify([{ name: "a", bundled: true }, { name: "b", bundled: false }]),
+    && JSON.stringify(host.pluginCandidates({ dependencies: { b: "1", a: "1" }, dsh: { profile: { bundles: ["a"] } } })) === JSON.stringify([{ name: "a", bundled: true, spec: "1" }, { name: "b", bundled: false, spec: "1" }]),
   JSON.stringify(host.pluginCandidates({ dependencies: { b: "1", a: "1" }, dsh: { profile: { bundles: ["a"] } } })),
 );
+check(
+  "classifySpec: link/file = 本地链接（不该升级）",
+  host.classifySpec("link:/Users/x/dsh-foo") === "local" && host.classifySpec("file:../dsh-bar") === "local",
+  host.classifySpec("link:/Users/x/dsh-foo"),
+);
+check("classifySpec: 纯版本号 = 精确锁定（plugin add 挪不动）", host.classifySpec("0.5.27") === "pinned" && host.classifySpec("1.8.20") === "pinned", host.classifySpec("0.5.27"));
+check("classifySpec: ^ / ~ / * = 可浮动范围", host.classifySpec("^0.8.5") === "range" && host.classifySpec("~1.2.0") === "range" && host.classifySpec("*") === "range", host.classifySpec("^0.8.5"));
+check("classifySpec: 空值不抛错，判成 range（保守：不阻断升级入口）", host.classifySpec("") === "range" && host.classifySpec(null) === "range");
 
 /* readInstalled 用一次性 fixture 目录验：判据是**插件契约**，不能靠本机碰巧装了什么来覆盖 */
 const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-upd-"));
@@ -630,6 +638,43 @@ const up405 = mockRes();
 await routes["/api/dpharness/updates"]({ method: "POST", url: "/api/dpharness/updates" }, up405);
 check("updates 路由: 非 GET → 405", up405.out.status === 405, "status=" + up405.out.status);
 npmVersions.delete("dsh-dpharness");
+
+/* --- 2026-10-12 用户实测：复制出去的安装命令装错了 profile ---
+   原先照抄站点详情页的 `--profile web`；desktop profile 的用户拿去执行会装进 web profile，
+   桌面版里永远看不到那个插件 —— 用户只会得出「安装不成功」。 */
+const searchRoute = mockRes();
+await routes["/api/dpharness/search"]({ method: "GET", url: "/api/dpharness/search?q=&take=30" }, searchRoute);
+const searchCmds = (searchRoute.out.body.plugins || []).map((item) => item.cmd).filter(Boolean);
+check(
+  "搜索：复制出去的安装命令用**本机真实 profile**（桌面版不能照抄站点的 --profile web）",
+  searchCmds.length > 0 && searchCmds.every((cmd) => cmd.indexOf("--profile " + metaRoutes.out.body.profile + " ") > 0),
+  searchCmds[0],
+);
+check(
+  "host: 生成命令处不再硬编码 --profile web（有测试锁住）",
+  /cmd: target \? `dsh plugin --profile \$\{PROFILE\} add \$\{target\}` : null/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")),
+);
+const clientSrcUpd = fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8");
+check("client: 底部提示词不再把 --profile web 说成必填（那会把人推向错 profile）", !/--profile web/.test(clientSrcUpd) && clientSrcUpd.includes('t("footer.hint")'));
+
+/* --- 本地链接与精确锁定：不该被当成"可升级" --- */
+check(
+  "updates 路由: 本地链接的包不进更新检查，单列在 locals 里（本机 20 个依赖里有 11 个）",
+  !upBody.plugins.some((item) => String(item.spec || "").startsWith("link:"))
+    && upBody.locals.every((row) => String(row.spec || "").startsWith("link:") || String(row.spec || "").startsWith("file:"))
+    && upBody.counts.local === upBody.locals.length,
+  "local=" + upBody.counts.local + " checked=" + upBody.counts.checked,
+);
+check(
+  "updates 路由: 每条带 spec 与 kind（界面据此解释「为什么升不动」）",
+  upBody.plugins.every((item) => typeof item.spec === "string" && ["range", "pinned"].includes(item.kind)),
+  JSON.stringify(upBody.plugins.slice(0, 2).map((i) => ({ n: i.name, spec: i.spec, kind: i.kind }))),
+);
+check("client: 精确锁定的行标出来并说明原因", clientSrcUpd.includes('t("updates.pinned")') && clientSrcUpd.includes('t("updates.pinnedNote")'));
+check("client: 本地链接单列并说清「为什么不在列表里」", clientSrcUpd.includes('t("updates.locals")') && clientSrcUpd.includes('t("updates.localsNote")'));
+check("client: 装完刷新清单（否则行上还是旧版本号，用户判定「升级没成功」）", /loadUpdates\(true\);/.test(clientSrcUpd) && (clientSrcUpd.match(/loadUpdates\(true\)/g) || []).length >= 3);
+check("host: 安装成功后作废更新缓存（否则刷新拿到的还是装之前那份清单）", /updatesCache = \{ at: 0, value: null \};/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")));
+check("client: 装成但版本没变要说明（清单写死/本地链接的包挪不动）", clientSrcUpd.includes('t("updates.noChange")') && /job\.from === item\.current/.test(clientSrcUpd));
 
 globalThis.fetch = realFetch;
 
@@ -1035,7 +1080,7 @@ check(
 );
 
 /* --- v0.5.0：一键升级 / 批量升级 --- */
-check("client: 一键升级复用安装通道（同一个 InstallRow，只换 kind）", /h\(InstallRow, \{ key: "do", item: \{ pkg: String\(item\.name\) \+ "@latest" \}, kind: "upgrade" \}\)/.test(clientSource));
+check("client: 一键升级复用安装通道（同一个 InstallRow，只换 kind；并带上当前版本以便识别「装完没变」）", /h\(InstallRow, \{ key: "do", item: \{ pkg: String\(item\.name\) \+ "@latest", current: item\.current \}, kind: "upgrade" \}\)/.test(clientSource));
 check(
   "client: 批量**串行**执行（宿主同一时刻只允许一个安装任务，并发只会拿到 409）",
   /await runInstall\(\{ pkg: names\[index\] \+ "@latest" \}, t, "upgrade"\)/.test(clientSource) && /for \(let index = 0; index < names\.length/.test(clientSource),
