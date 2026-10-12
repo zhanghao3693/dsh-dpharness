@@ -905,7 +905,7 @@ check(
 check("client: 只有 outdated === true 才谈升级（未知/已最新不摊命令）", /data\.outdated === true && upgrade/.test(clientSource));
 check("client: 「已是最新」与「查不到」是两句不同的话", clientSource.includes('t("changelog.upToDate")') && /data\.outdated === false/.test(clientSource));
 check("client: 复制升级命令单独埋点", clientSource.includes('action: "upgrade_copy"'));
-check("client: 只在确实有新版本时上报（把「已最新」也报进来会撑大分母）", /if \(result\.body\.outdated === true\) \{/.test(clientSource));
+check("client: 只在确实有新版本时上报（把「已最新」也报进来会撑大分母）", /if \(body\.outdated === true\) \{/.test(clientSource));
 
 /* --- v0.5.0：更新检查 + 红点 --- */
 check("tab: 视图切换多了「更新」", tabHtml.includes("updates.tab"), tabHtml.includes("updates.tab") ? "有" : "无");
@@ -942,6 +942,45 @@ check(
   `title=${tabDailyOff.includes("daily.title")} tab=${tabDailyOff.includes("daily.tab")}`,
 );
 localStorage.removeItem("dph-hub-daily");
+
+/* --- v0.5.0：本机路由的响应必须容忍「正文不是 JSON」 ---
+   实测事故（2026-10-12，用户截图）：桌面版 host 进程比客户端代码旧 ——
+   客户端刷新页面即生效，而 host 的路由要**重启 dsh** 才注册。窗口期里请求落到
+   dsh 静态前端的兜底上，返回纯文本（浏览器里是 not found、无凭据时 unauthorized），
+   于是界面上出现「Unexpected token 'o', "not found" is not valid JSON」，
+   真实原因（进程没重启）被彻底掩盖。 */
+const htmlFetch = globalThis.fetch;
+globalThis.fetch = async () => ({ ok: false, status: 401, text: async () => "unauthorized" });
+let staleErr = null;
+try {
+  await client.readHostJson("/api/dpharness/updates");
+} catch (error) {
+  staleErr = error;
+}
+check(
+  "readHostJson: 非 JSON 正文 → 标为 stale，且绝不把 JSON 解析错误抛给用户",
+  !!staleErr && staleErr.stale === true && !/JSON/i.test(staleErr.message),
+  staleErr && staleErr.message,
+);
+globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: true, value: 1 }) });
+const okBody = await client.readHostJson("/api/dpharness/updates");
+check("readHostJson: 正常 JSON 原样返回", okBody.value === 1, JSON.stringify(okBody));
+globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: false, error: "boom" }) });
+let bizErr = null;
+try {
+  await client.readHostJson("/api/dpharness/updates");
+} catch (error) {
+  bizErr = error;
+}
+check("readHostJson: 业务错误保留服务端给的 error 文案，且不标成 stale", !!bizErr && bizErr.message === "boom" && bizErr.stale !== true, bizErr && bizErr.message);
+globalThis.fetch = htmlFetch;
+check("client: 四个取数 hook 共用同一个解析器（裸 response.json().then 已全部移除）", !/response\.json\(\)\.then/.test(clientSource));
+check(
+  "client: stale 时给「重启 dsh」出口，且要两步确认（重启会掐断当前会话）",
+  /store\.stale[\s\S]{0,1200}?updates\.restartConfirm/.test(clientSource)
+    && clientSource.includes('action: "restart_ask", scope: "stale"')
+    && clientSource.includes('via: "stale"'),
+);
 
 /* --- 失败信息提取：用真实捕获的 pnpm 输出（不是编造的样例） --- */
 const realPnpmFailure = [

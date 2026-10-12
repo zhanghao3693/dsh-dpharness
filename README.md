@@ -97,6 +97,14 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 > 💡 升级命令里的 profile 用**本机真实值**拼（桌面版是 `desktop` 而不是 `web`）。
 > 本插件只给命令、不代你安装。
 
+> ⚠️ **改了插件代码 ≠ 立即生效**：客户端是刷新页面即生效，但 **host 的路由要重启 dsh 才会注册**。
+> 这个窗口期里 `/api/dpharness/updates` 会落到 dsh 静态前端的兜底上、返回**纯文本**（实测
+> 桌面版 `not found`、无凭据时 `unauthorized`）。界面因此给出「本机 host 还没提供这个接口 ——
+> 通常是 dsh 未重启」，并在本机装了 `dsh-restart` 时给一个**两步确认**的重启按钮。
+> 早期版本在这里直接把 `response.json()` 的解析错误抛给用户
+> （`Unexpected token 'o', "not found" is not valid JSON`），真实原因被彻底掩盖 —— 已修：
+> 四个取数 hook 现在共用 `readHostJson()`，先取文本再解析，解析失败一律标成「路由未注册」。
+
 ## 浮窗可以彻底关掉（v0.4.4）
 
 `shell.overlay` 是**跨路由常驻**的：胶囊在首页、会话页、任何页面都在。
