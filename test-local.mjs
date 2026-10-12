@@ -36,9 +36,21 @@ function check(name, ok, detail) {
 /* ---------------------------------------------------------------- host half */
 /* 拦截 host 发出的对外请求，断言转发载荷是否符合站点端点的真实契约。 */
 const sent = [];
+/* 更新日志的两个外部上游（默认「都没有」—— 与 2026-10-12 的线上实况一致：
+   仓库没有 Release、离线场景 npm 也查不到）。逐个场景再按需改。 */
+let changelogUpstream = { releases: [], latest: null };
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, options) => {
   sent.push({ url: String(url), options });
+  /* GitHub Releases：真实远端返回的是**数组**（没有 Release 就是空数组） */
+  if (String(url).includes("api.github.com/repos/")) {
+    return { ok: true, status: 200, json: async () => changelogUpstream.releases };
+  }
+  /* npm 最新版（npmmirror）：查不到时返回非 200，host 必须降级成 null 而不是编一个版本号 */
+  if (String(url).includes("registry.npmmirror.com/")) {
+    if (changelogUpstream.latest === null) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ version: changelogUpstream.latest }) };
+  }
   // 「分类精选」上游（站点 GET /api/best）：结构与真实接口一致（大类→小类→条目）
   if (String(url).includes("/api/best")) {
     return {
@@ -155,7 +167,7 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册六条路由", Object.keys(routes).length === 6, Object.keys(routes).join(", "));
+check("host: 注册七条路由", Object.keys(routes).length === 7, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -380,7 +392,7 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出六条路由", metaRoutes.out.body.routes.length === 6, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出七条路由", metaRoutes.out.body.routes.length === 7, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
@@ -445,6 +457,81 @@ check("pkgState: 清单不可读 → 全 null", JSON.stringify(host.pkgState("x"
 check("pkgState: 有依赖无 bundles → dep=true, bundled=null", JSON.stringify(host.pkgState("x", { dependencies: { x: "1.0.0" } })) === '{"dep":true,"bundled":null}', JSON.stringify(host.pkgState("x", { dependencies: { x: "1.0.0" } })));
 check("pkgState: 在加载清单里 → bundled=true", JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: ["x"] } } })) === '{"dep":false,"bundled":true}', JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: ["x"] } } })));
 check("pkgState: 都不在 → 全 false", JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: [] } } })) === '{"dep":false,"bundled":false}', JSON.stringify(host.pkgState("x", { dependencies: {}, dsh: { profile: { bundles: [] } } })));
+
+/* --- v0.5.0：更新日志（host 侧） ---
+   两个上游默认都不可用，正是 2026-10-12 的线上实况：仓库没有 Release、离线时 npm 也查不到。
+   三态是这一节的判据核心：latest=null（查不到）绝不能被显示成「已是最新」。 */
+const changelogMod = await import("./lib/changelog.js");
+check("changelog: 首条版本号 == 代码常量 VERSION（发版纪律的一半）", changelogMod.CHANGELOG[0].version === host.VERSION, changelogMod.CHANGELOG[0].version + " vs " + host.VERSION);
+check("changelog: 首条版本号 == package.json version（另一半，少了它就悄悄落后于发版）", changelogMod.CHANGELOG[0].version === pkgVersion, changelogMod.CHANGELOG[0].version + " vs " + pkgVersion);
+check(
+  "changelog: 条目按版本从新到旧（界面靠顺序表达新旧，排序错了就是错的）",
+  changelogMod.CHANGELOG.every((entry, i, all) => i === 0 || changelogMod.compareVersions(all[i - 1].version, entry.version) > 0),
+  changelogMod.CHANGELOG.map((e) => e.version).join(" > "),
+);
+check(
+  "changelog: 每条都有 version/date/title 且 items 非空",
+  changelogMod.CHANGELOG.every((e) => e.version && e.date && e.title && Array.isArray(e.items) && e.items.length > 0),
+);
+check("compareVersions: 0.4.4 < 0.5.0", changelogMod.compareVersions("0.4.4", "0.5.0") === -1);
+check("compareVersions: 相等", changelogMod.compareVersions("0.5.0", "0.5.0") === 0);
+check("compareVersions: 0.10.0 > 0.9.9（不能按字符串比）", changelogMod.compareVersions("0.10.0", "0.9.9") === 1);
+check("compareVersions: 脏输入不抛错、也不误报有新版本", changelogMod.compareVersions("x", "0.0.0") === 0, String(changelogMod.compareVersions("x", "0.0.0")));
+const rawBody = "- 修复 A\n## 标题\n\n---\nhttps://example.com/x\n* 新增 B";
+check("releaseItems: 剥掉 markdown 记号、丢掉分隔线与纯链接", JSON.stringify(changelogMod.releaseItems(rawBody)) === JSON.stringify(["修复 A", "标题", "新增 B"]), JSON.stringify(changelogMod.releaseItems(rawBody)));
+check(
+  "normalizeReleases: 草案与非法 tag 被丢弃",
+  changelogMod.normalizeReleases([
+    { tag_name: "v0.6.0", published_at: "2026-11-01T00:00:00Z", body: "x", draft: false },
+    { tag_name: "v0.5.1", draft: true },
+    { tag_name: "nightly" },
+  ]).length === 1,
+);
+check(
+  "mergeChangelog: 远端与内置同版本 → 用远端（Release 才是发版的正式说明，且能事后修正）",
+  changelogMod.mergeChangelog(changelogMod.CHANGELOG, [{ tag_name: "v0.5.0", published_at: "2026-10-13T00:00:00Z", body: "- 远端改写的说明", draft: false }]).find((e) => e.version === "0.5.0").items[0] === "远端改写的说明",
+);
+check(
+  "mergeChangelog: 远端正文为空时不覆盖内置（空 release 很常见，覆盖会丢信息）",
+  changelogMod.mergeChangelog(changelogMod.CHANGELOG, [{ tag_name: "v0.5.0", published_at: "2026-10-13T00:00:00Z", body: "", draft: false }]).find((e) => e.version === "0.5.0").origin === "builtin",
+);
+check(
+  "mergeChangelog: 远端独有版本补进来",
+  changelogMod.mergeChangelog(changelogMod.CHANGELOG, [{ tag_name: "v0.6.0", published_at: "2026-11-01T00:00:00Z", body: "- 新东西", draft: false }])[0].version === "0.6.0",
+);
+
+/* 路由场景一：两个上游都不可用 → 明确降级为内置，且「查不到」落到 null */
+const clRoute = mockRes();
+await routes["/api/dpharness/changelog"]({ method: "GET", url: "/api/dpharness/changelog" }, clRoute);
+const clBody = clRoute.out.body;
+check("changelog 路由: 200 且 ok", clRoute.out.status === 200 && !!clBody && clBody.ok === true, "status=" + clRoute.out.status);
+check("changelog 路由: current 取自代码常量", clBody.current === host.VERSION, clBody.current);
+check("changelog 路由: 查不到最新版 → latest=null 且 outdated=null（三态，绝不能等于「已是最新」）", clBody.latest === null && clBody.outdated === null, JSON.stringify({ latest: clBody.latest, outdated: clBody.outdated }));
+check("changelog 路由: 无 Release → source=builtin，条目就是内置底稿", clBody.source === "builtin" && clBody.entries.length === changelogMod.CHANGELOG.length, JSON.stringify({ source: clBody.source, n: clBody.entries.length }));
+check("changelog 路由: upgrade 命令用本机真实 profile 拼（与 meta 报的 profile 一致）", clBody.upgrade === "dsh plugin --profile " + metaRoutes.out.body.profile + " add dsh-dpharness@latest", clBody.upgrade);
+const cl405 = mockRes();
+await routes["/api/dpharness/changelog"]({ method: "POST", url: "/api/dpharness/changelog" }, cl405);
+check("changelog 路由: 非 GET → 405", cl405.out.status === 405, "status=" + cl405.out.status);
+
+/* 路由场景二：「确实有新版」。必须换一个**新的 host 实例** ——
+   结果是 5 分钟缓存的，同一实例里第二次调用只会拿到上一次的缓存，那会掩盖真实分支。 */
+changelogUpstream = {
+  releases: [{ tag_name: "v0.5.1", published_at: "2026-10-20T00:00:00Z", name: "0.5.1", body: "- 远端发布说明", draft: false }],
+  latest: "0.5.1",
+};
+const hostFresh = await import("./lib/index.js?fresh=changelog");
+const routesFresh = {};
+hostFresh.apply({
+  effect: (fn) => fn(),
+  webServer: { register: (config) => { routesFresh[config.path] = config.handler; return { dispose() {} }; } },
+});
+const clFresh = mockRes();
+await routesFresh["/api/dpharness/changelog"]({ method: "GET", url: "/api/dpharness/changelog" }, clFresh);
+const clFreshBody = clFresh.out.body;
+check("changelog 路由: 有 Release → source=builtin+github", clFreshBody.source === "builtin+github", clFreshBody.source);
+check("changelog 路由: npm 有更高版本 → outdated=true 且带出该版本号", clFreshBody.outdated === true && clFreshBody.latest === "0.5.1", JSON.stringify({ outdated: clFreshBody.outdated, latest: clFreshBody.latest }));
+check("changelog 路由: 远端同版本覆盖内置正文", (clFreshBody.entries[0].items || []).includes("远端发布说明"), JSON.stringify(clFreshBody.entries[0].items));
+changelogUpstream = { releases: [], latest: null };
 
 globalThis.fetch = realFetch;
 
@@ -738,6 +825,19 @@ check(
   "settings: 两处开关同源（都订阅共享 store，改一处另一处立刻同步）",
   /function SettingsFloatRow\(\)\s*\{[\s\S]{0,300}?useHub\(\)/.test(clientSource) && /function SettingsPanel\(\)\s*\{[\s\S]{0,200}?useHub\(\)/.test(clientSource),
 );
+
+/* --- v0.5.0：更新日志（客户端侧） --- */
+check("settings: 设置页含「更新日志」一节（SSR 首屏是加载态）", setPanelHtml.includes("changelog.title") && setPanelHtml.includes("changelog.loading"), setPanelHtml.slice(0, 90));
+check("client: 更新日志读本机 host 的只读接口", clientSource.includes('"/api/dpharness/changelog"'));
+check(
+  "client: 更新日志只在设置页请求（浮窗/页签不顺手拉一遍）",
+  /function SettingsPanel\(\)[\s\S]{0,400}?useChangelog\(\)/.test(clientSource) && (clientSource.match(/useChangelog\(\)/g) || []).length === 2,
+  "useChangelog 出现次数=" + String((clientSource.match(/useChangelog\(\)/g) || []).length) + "（1 处定义 + 1 处调用）",
+);
+check("client: 只有 outdated === true 才谈升级（未知/已最新不摊命令）", /data\.outdated === true && upgrade/.test(clientSource));
+check("client: 「已是最新」与「查不到」是两句不同的话", clientSource.includes('t("changelog.upToDate")') && /data\.outdated === false/.test(clientSource));
+check("client: 复制升级命令单独埋点", clientSource.includes('action: "upgrade_copy"'));
+check("client: 只在确实有新版本时上报（把「已最新」也报进来会撑大分母）", /if \(result\.body\.outdated === true\) \{/.test(clientSource));
 
 /* --- v0.5.0：默认视图顶部要有「今日推荐」，关掉后必须真的消失 ---
    与浮窗隐藏同一条思路：状态是**模块加载时**从 localStorage 读入的，

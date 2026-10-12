@@ -52,7 +52,7 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 | 左下入口 | 侧边栏底部（`sidebar.footer.action`） | 点击展开全站浮窗；**浮窗被关闭时，它同时是恢复入口** |
 | 全站浮窗 | 右下角（`shell.overlay`，跨路由含首页） | 随手查：随时搜、随时装 |
 | **设置 → 通用**（v0.5.0） | `settings.general.item` | 一行：浮窗显隐开关（最高频的那个） |
-| **设置 → 插件 → 严选插件**（v0.5.0） | `settings.plugins.tab` | 完整设置页：浮窗 / 每日推荐 / 匿名统计 + 恢复默认 |
+| **设置 → 插件 → 严选插件**（v0.5.0） | `settings.plugins.tab` | 完整设置页：浮窗 / 每日推荐 / 匿名统计 + 更新日志 + 恢复默认 |
 
 设置页里的三个开关与别处**共用同一个状态源**（都读共享 store 并走同一条写路径），
 所以不会出现「在通用里开了、到插件页签里还显示关」的错位。
@@ -88,6 +88,35 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 > —— 表现为这两个设置入口干脆不出现，其余功能照常。（依据：`@deepseek-ai/dsh-client-runtime`
 > `src/client/slots.ts` 的 `inject` 实现，2026-10-12 查证。）
 
+
+## 更新日志与「你装的不是最新版」（v0.5.0）
+
+放在 **设置 → 插件 → 严选插件** 的最底部。一次给出三件事，缺一件就不好用：
+
+| 给出 | 来源 | 说明 |
+|---|---|---|
+| 你装的是哪个版本 | host 的代码常量 `VERSION` | 客户端读不到 `package.json`，版本只可能由 host 提供 |
+| 有没有更新的版本 | `registry.npmmirror.com/dsh-dpharness/latest` | **三态**：`true` / `false` / `null`（`null` = 没查到，**绝不显示成「已是最新」**） |
+| 怎么升 | 本机真实 profile 拼出的 `dsh plugin --profile <p> add dsh-dpharness@latest` | profile 名按本机填好（桌面版是 `desktop` 不是 `web`），点一下复制 |
+
+**日志正文的权威源只有一份**：`lib/changelog.js`。客户端**不持有副本** —— 双份数据必然漂移
+（本站在「安装命令口径」上已经栽过一次）。客户端读的是**本机 host** 的只读路由，
+于是「内置数据」与「离线可用」两个性质同时成立。
+
+内容优先级（`mergeChangelog()` 的规则，逐条有单测）：
+
+1. GitHub 有对应版本的 Release → **用 Release 正文覆盖内置**（Release 才是发版当时的正式说明，且能事后修正）；
+2. Release 正文为空 → **不覆盖**（空 release 很常见，覆盖等于丢信息）；
+3. Release 有、内置没有的版本 → 补进来；
+4. 其余用内置底稿；输出按版本号从新到旧（顺序本身就是信息）。
+
+> ⚠️ **发版纪律（有测试兜底）**：`lib/changelog.js` 里**第一条的版本号必须等于 `package.json` 的
+> `version`**，否则「更新日志」会悄悄落后于实际发版 —— 那比没有更新日志更糟。
+> `test-local.mjs` 对这两处（代码常量与 package.json）双向断言。
+
+> 💡 远端当前**没有任何 Release**（`api.github.com/.../releases` 实测返回 `[]`），
+> 故 `source` 恒为 `builtin`，日志直接来自内置底稿。想让 Release 生效，
+> 先在 GitHub 上按 `vX.Y.Z` 的 tag 发 Release，之后同名版本会以 Release 正文为准。
 
 ## 卡片显示什么
 
@@ -148,6 +177,8 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 | `open` / `search` / `best_open` | 打开面板 / 搜索 / 切到分类精选 | 入口有没有用 |
 | `hide` / `show` | 手动关闭浮窗 / 重新打开（页签底部与设置页共用同一条写路径） | 有多少人嫌这个浮窗碍事（`scope` 区分是胶囊、面板、页签还是设置触发的） |
 | `daily_toggle` | 每日推荐开关（`scope=settings:on` / `settings:off`） | 「每天一条」有没有人嫌多余 |
+| `changelog_open` | 打开设置页时**发现自己是旧版** | 有多少人停在旧版本上（只上报「确实有新版」的情况） |
+| `upgrade_copy` | 复制升级命令 | 看完日志真的去升级的比例 |
 | `prefs_reset` | 设置页点「恢复默认」 | 有多少人需要回到出厂状态（往往意味着某个默认值不合适） |
 | `install_ask` | 点「安装」（弹出确认框） | 有多少人真的动了安装的念头 |
 | `install_cancel` | 确认框点取消 | 被确认框劝退的人（文案/门槛的优化对象） |
@@ -197,6 +228,7 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 |---|---|
 | `GET /api/dpharness/search?q=&take=&sort=stars` | 目录查询，字段裁剪后返回，按 `q+take+sort` 缓存 5 分钟。响应含 `count`（本次返回条数）与 `total`（该筛选下的真实命中总数，**展示口径以它为准**） |
 | `GET /api/dpharness/best` | 分类精选榜单（站点 `/api/best` 的代理 + 字段裁剪），缓存 5 分钟 |
+| `GET /api/dpharness/changelog` | 更新日志（内置底稿 + 可选 GitHub Releases）+ 当前/最新版本比对 + 升级命令，缓存 5 分钟 |
 | `GET /api/dpharness/postinstall?pkg=&via=&at=` | 安装后回执（只读：进程启动时间 + profile 加载清单） |
 | `POST /api/dpharness/event` | 埋点代理 → `dpharness.com/api/track/event` |
 | `POST /api/dpharness/install` | `{ pkg }`，spawn `dsh plugin add`；返回 202 + 任务启动 |
@@ -230,7 +262,7 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 
 ## 权限与外部服务（上架声明）
 
-- **网络**：仅访问 `dpharness.com` 站点端点（目录/榜单/埋点回执）与 npm registry（一键安装走 `dsh` CLI，本插件不直接下载第三方包）；无其他外部服务。
+- **网络**：访问 `dpharness.com` 站点端点（目录 / 榜单 / 埋点回执）、`api.github.com`（**只读** releases，用于补全更新日志；当前仓库未发过 Release，故此路通常返回空）与 `registry.npmmirror.com`（只读 `<包名>/latest`，用于判断「你装的不是最新版」）。三处都只发 GET，任一失败都静默降级、不影响功能；一键安装走 `dsh` CLI，本插件不直接下载第三方包。
 - **文件**：只读 DSH Profile 内的清单文件（回执查询）；不写 Profile 之外的任何路径。
 - **命令**：不执行 shell 命令；「一键安装」是把安装命令复制到剪贴板/交给宿主 CLI，由用户触发。
 - **凭据**：不读取、不存储任何凭据；也**不在任何展示或上报路径里输出凭据**（安装日志统一脱敏，见「隐私」）。
