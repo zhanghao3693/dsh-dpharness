@@ -426,6 +426,24 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 - 脱敏顺序固定为**先截断（600 字）后替换**：反过来的话，截断会把 token 切成半截，
   半截既匹配不上模式、又照样是泄露。
 
+## 发布前回归（有真实用户后必做）
+
+发版前把下面三步走一遍 —— 每一步都能留下可核对的输出，不是"看着像没问题"：
+
+1. **干净 profile 安装**（验打包与 bundle 声明）：
+   `"<App>/Contents/Resources/runtime/cli/bin/dsh" plugin --profile <临时名> add <本仓库绝对路径>`
+   然后核对三件事：profile 的 `dependencies` 里有本插件、`dsh.profile.bundles` 里有 `dpharness`、
+   `files` 清单里的文件**全部落地**（漏一个客户端就白屏 —— 这一步专门防它）。
+2. **host 侧边界回归**：用 `DSH_DPHARNESS_PROFILE=<临时名>` 把 `lib/index.js` 跑一遍八条路由，
+   重点是**空环境**（除自己外 0 个插件）不崩：`counts` 自洽、`locals` 含自己、`self` 有中文名、
+   `/search` 每条都带 `installed`、`postinstall` 能查到 `dep`/`bundled`。
+3. **客户端渲染回归**：`test-local.mjs` 的参数化断言 **+ 面板展开态 / 每日 / 分类精选 / 更新视图的 SSR 渲染**。
+   后者是 `node --check` 抓不到的那一层 —— 实测它抓到过一个 `batchAsk` 用错组件的 `ReferenceError`
+   （`node --check` 与参数化断言都放过了它）。
+
+> ⚠️ 桌面版 CLI 会自己注入 profile：`dsh web --profile X` 会报 `select a profile only once`，
+> 所以第 2 步用模块级 harness，而不是另起一个实例。
+
 ## 权限与外部服务（上架声明）
 
 - **网络**：访问 `dpharness.com` 站点端点（目录 / 榜单 / 埋点回执）、`api.github.com`（**只读** releases，用于补全更新日志；当前仓库未发过 Release，故此路通常返回空）与 `registry.npmmirror.com`（**只读** `<包名>/latest`：既用于判断本插件是否最新，也用于逐包检查你已安装的插件）。三处都只发 GET，任一失败都静默降级、不影响功能；一键安装走 `dsh` CLI，本插件不直接下载第三方包。
