@@ -1087,6 +1087,32 @@ check(
   "client: 待重启横幅文案动词中性（装卸共用一条横幅，不能写死「已安装」）",
   clientSource.includes('"install.pendingBody": "{n}：重启 dsh 后生效"'),
 );
+
+/* --- v0.5.0 对比：把候选并排看关键事实（「内容评测」差异化在客户端的形态）--- */
+check(
+  "client: 对比上限 3 且选择集**不持久**（对比是一次性动作，不是偏好）",
+  /const COMPARE_MAX = 3;/.test(clientSource) && /compare: \[\]/.test(clientSource) && !/COMPARE_KEY/.test(clientSource),
+);
+check(
+  "client: 对比存的是**条目对象**而不是包名（搜索词一改列表就换，只存名字表格会当场变空）",
+  /setHub\(\{ compare: list\.concat\(\[item\]\) \}\)/.test(clientSource),
+);
+check(
+  "client: 少于 2 个开不了表（比一个东西没有意义），并可一键清空",
+  /disabled: !enough/.test(clientSource) && clientSource.includes('"compare.needTwo"') && /compare_clear/.test(clientSource),
+);
+check(
+  "client: 对比表只放**事实**（星标/实装验证/本机已装/分类/卖点），不放评价",
+  ["compare.stars", "compare.verify", "compare.tested", "compare.installed", "compare.cat", "compare.sell"].every((key) => clientSource.includes('"' + key + '"')),
+);
+check(
+  "client: 对比开关放在卡片最左（多选的第一列位置固定，扫一眼就知道能选）",
+  /comparable \? h\("button", \{[\s\S]{0,240}?key: "cmp"/.test(clientSource) && /renderCard\((item|picked\.item), [^)]*true\)/.test(clientSource),
+);
+check(
+  "client: 浮窗与页签都接了对比条（选择集共享，展开状态各自记）",
+  (clientSource.match(/h\(CompareBar, \{ key: "cmpBar", open: comparing/g) || []).length === 2 && (clientSource.match(/const \[comparing, setComparing\]/g) || []).length === 2,
+);
 check(
   "client: 安装失败区分阶段与原因（升级走自己的失败事件名）",
   /fail: "install_failed"/.test(clientSource)

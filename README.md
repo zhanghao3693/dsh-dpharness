@@ -10,7 +10,7 @@
 
 | 视图 | 数据来源 | 回答的问题 |
 |---|---|---|
-| **严选推荐** | `GET /api/plugins`（全量目录） | 「我知道要什么，帮我找」——可搜索、可按 Star 排序 |
+| **严选推荐** | `GET /api/plugins`（全量目录） | 「我知道要什么，帮我找」——可搜索、可按 Star 排序；卡片最左可**加对比**（最多 3 个，并排看星标/验证/已装/分类/卖点） |
 | **分类精选** | `GET /api/best`（月度策展，与站点 [/best](https://dpharness.com/best) 同一份数据） | 「我该装哪几个」——按大类 → 小类分组，每小类只留 2~3 个 |
 | **套装**（v0.5.0） | `GET /api/sets`（组合方案，与站点 [/sets](https://dpharness.com/sets) 同一份数据） | 「我这件整事该配哪一套」——跨插件**纵向**组合：一整套 + 安装顺序 + 冲突提示 + 批量命令 |
 | **每日推荐**（v0.5.0） | 同上榜单，按自然日取一条 | 「今天装哪个」——当天唯一一条，所有用户一致 |
@@ -365,6 +365,7 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 | `set_install_ask` / `set_install_start` / `set_install_done` | 一键安装整套：上劲 / 开跑 / 收尾（带 `slug` 与 `n`） | 方案包有没有人整包装、装完几个 |
 | `remove_ask` / `remove_cancel` / `remove_start` / `remove_ok` / `remove_noop` / `remove_failed` | 卸载的完整漏斗（`noop` = 报成功但磁盘没变，与安装的 same 同类） | 卸载有没有人用、卡在哪 |
 | `ignore_on` / `ignore_off` | 忽略此版本 / 取消忽略（带 `pkg`、`v`） | 「别提醒我这一版」是不是真需求 |
+| `compare_on` / `compare_off` / `compare_clear` / `compare_copy` | 加入对比 / 移出 / 清空 / 从对比表复制命令 | 对比有没有人真用（服务「内容评测」那条差异化） |
 | `hide` / `show` | 手动关闭浮窗 / 重新打开（页签底部与设置页共用同一条写路径） | 有多少人嫌这个浮窗碍事（`scope` 区分是胶囊、面板、页签还是设置触发的） |
 | `daily_toggle` | 每日推荐开关（`scope=settings:on` / `settings:off`） | 「每天一条」有没有人嫌多余 |
 | `changelog_open` | 打开设置页时**发现自己是旧版** | 有多少人停在旧版本上（只上报「确实有新版」的情况） |
