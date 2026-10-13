@@ -964,12 +964,20 @@ check("footer: 浮窗可见（面板收起）时提示「展开面板」", footO
 
 check("overlay: 关闭状态落盘（下次进来仍然是关的）", /HIDE_KEY = "dph-hub-hidden"/.test(clientSource) && /storeHidden\(/.test(clientSource));
 check(
-  "client: 浮窗关闭后侧边栏按钮**不恢复**（用户反馈：胶囊关闭了就别默认打开）—— 隐藏态直接 return，全文再无 footer 范围的 setFloatVisible",
-  /if \(state\.hidden\) return;/.test(clientSource) && !/setFloatVisible\([^)]*"footer"\)/.test(clientSource),
+  "client: 浮窗关闭后侧边栏按钮**两步确认**才恢复（用户反馈：胶囊关闭了就别默认打开；而纯无反应又被当成没生效）",
+  /if \(state\.hidden\) \{[\s\S]{0,200}if \(!armed\) \{[\s\S]{0,120}setArmed\(true\);[\s\S]{0,120}return;/.test(clientSource),
 );
 check(
-  "client: 侧边栏按钮只在浮窗**可见**时开关面板（隐藏态先 return，可见态 toggle 面板，不再 hideHub、不再叫回胶囊）",
-  /if \(state\.hidden\) return;/.test(clientSource) && /const next = !state\.open;/.test(clientSource) && /setHub\(\{ open: next \}\)/.test(clientSource),
+  "client: 恢复只发生在第二步（上劲后 setArmed(false) + setFloatVisible(true)，只恢复显示、不顺手展开面板）",
+  /setArmed\(false\);\s*\n\s*setFloatVisible\(true, "footer"\);/.test(clientSource) && !/setFloatVisible\(true, "footer"\);\s*\n\s*setHub\(\{ open: true/.test(clientSource),
+);
+check(
+  "client: 上劲态有可见反馈且自动解除（描边类 + 脉冲动画 + 5 秒超时）—— 不能是 Silent 的无反馈",
+  /dph_lbArmed/.test(clientSource) && /@keyframes dphArmPulse/.test(clientSource) && /setTimeout\(\(\) => setArmed\(false\), 5000\)/.test(clientSource),
+);
+check(
+  "client: 侧边栏按钮只在浮窗**可见**时开关面板（隐藏态走上劲/恢复，可见态 toggle 面板，不碰显隐）",
+  /const next = !state\.open;/.test(clientSource) && /setHub\(\{ open: next \}\)/.test(clientSource),
 );
 check("client: 主动展开面板的入口只有两个用户点击：右下角胶囊 + 侧边栏按钮（后者仅浮窗可见时）", (clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length === 1 && /setHub\(\{ open: next \}\)/.test(clientSource), String((clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length) + " 处");
 check(
@@ -980,12 +988,12 @@ check(
   })(),
 );
 check(
-  "client: 按钮提示随状态说准（关掉了说怎么恢复、可见时说展开/收起 —— 不能点了没反应还写着「显示浮窗」）",
-  clientSource.includes('t("action.closedHint")') && clientSource.includes('t("action.expand")') && !/t\(state\.hidden \? "action\.show"/.test(clientSource),
+  "client: 按钮提示随状态说准（关掉了说怎么恢复/再点一次，可见时说展开/收起 —— 不能点了没反应还写着「显示浮窗」）",
+  clientSource.includes('t("action.closedHint")') && clientSource.includes('t("action.armRestore")') && clientSource.includes('t("action.expand")') && !/t\(state\.hidden \? "action\.show"/.test(clientSource),
 );
 check(
-  "client: 隐藏提示与设置提示不再拿侧边栏按钮当恢复入口（它已经不恢复了，文案不能撒谎）",
-  !/可再次打开/.test(clientSource) && !/永远可以再次打开/.test(clientSource) && clientSource.includes('"action.closedHint"'),
+  "client: 隐藏提示与设置提示说准恢复路径（连点两下侧边栏/页签勾选），不再写着「侧边栏永远可以再次打开」",
+  /连点两下/.test(clientSource) && !/可再次打开/.test(clientSource) && !/永远可以再次打开/.test(clientSource) && clientSource.includes('"action.closedHint"'),
 );
 check(
   "client: 「分类精选」大类默认全部收起（用户反馈：默认折叠，别第一个就展开挡路）",
