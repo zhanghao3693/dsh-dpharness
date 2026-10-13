@@ -1184,7 +1184,7 @@ check(
 );
 check(
   "client: 批量**串行**执行（宿主同一时刻只允许一个安装任务，并发只会拿到 409）",
-  /await runInstall\(\{ pkg: items\[index\]\.pkg \}, t, "upgrade"\)/.test(clientSource) && /for \(let index = 0; index < items\.length/.test(clientSource),
+  /await runInstall\(\{ pkg: items\[index\]\.pkg[^}]*\}, t, "upgrade"\)/.test(clientSource) && /for \(let index = 0; index < items\.length/.test(clientSource),
 );
 check(
   "client: 批量升级要**两步确认**（一次会改十几个包，一键直落对真实用户太危险）",
@@ -1193,6 +1193,42 @@ check(
 check("client: 批量可中止，中止后不再往下跑", /if \(hub\.batch && hub\.batch\.stopRequested\) break;/.test(clientSource) && clientSource.includes('action: "upgrade_all_stop"'));
 check("client: 批量完成后给重启出口（本地通道要重启才生效）", clientSource.includes('restartButton("batch")') && clientSource.includes('t("updates.restartNeeded")'));
 check("client: 自插件也算进批量（用户在意的是「一共几个」）", /if \(self\.outdated === true && self\.name\) outgoing\.unshift/.test(clientSource));
+
+/* --- v0.5.0 安装后引导：待重启横幅（2026-10-13）---
+   桌面 profile 实测没有 dshmarket，安装全走本地通道、必须重启才生效 ——
+   「装了没启用」是实装验证率最大的漏点。这条提醒必须：① 只在真需要重启时出现；
+   ② 跨视图/跨会话持久；③ 重启发生后改口说「已生效」，不继续催。 */
+check(
+  "client: 只有本地通道且真改了 profile 才记「待重启」（市场通道热挂载不记；same/none 版本没动也不记）",
+  /if \(!done\.market && done\.changed\) markRestartPending\(/.test(clientSource),
+);
+check(
+  "client: 待重启落 localStorage 且合并去重（连装几个只出一条，名字不重复）",
+  /RESTART_KEY = "dph-hub-restart-pending"/.test(clientSource) && /Array\.from\(new Set\(current\.names\.concat/.test(clientSource),
+);
+check(
+  "client: 横幅挂载问宿主 startedAt —— 重启已发生就改口「已生效」；取不到按未重启处理（宁可多提醒）",
+  /setEffective\(typeof body\.startedAt === "number" && body\.startedAt > pending\.at\)/.test(clientSource),
+);
+check(
+  "client: 新的待重启先重置「已生效」（否则装完第二个插件会沿用上一次的已生效状态）",
+  /setEffective\(false\);\s*\n\s*getJson\("\/api\/dpharness\/meta"\)/.test(clientSource),
+);
+check(
+  "client: 横幅的重启按钮同样两步确认，并单独埋点（重启会掐断当前会话）",
+  /action: "restart_ask", scope: scope/.test(clientSource) && /action: "restart_click", via: scope/.test(clientSource),
+);
+/* 真实渲染（不是源码匹配）：有待重启时，页签顶部必须真的出现横幅 */
+localStorage.setItem("dph-hub-restart-pending", JSON.stringify({ names: ["dsh-better-sidebar"], at: Date.now() }));
+const bannerTabHtml = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["conversation.view"], {}));
+check(
+  "tab: 有待重启时顶部渲染横幅（含「立即重启」与「知道了」两个出口）",
+  bannerTabHtml.includes("dph_restart") && bannerTabHtml.includes("install.restart") && bannerTabHtml.includes("install.dismiss"),
+  bannerTabHtml.slice(0, 160),
+);
+localStorage.removeItem("dph-hub-restart-pending");
+const noBannerHtml = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["conversation.view"], {}));
+check("tab: 没有待重启时不渲染横幅（不常驻占位）", !noBannerHtml.includes("dph_restart"));
 check(
   "client: 更新行中文名优先，包名退到第二行（用户要认得出这是谁）",
   /nameZh \|\| String\(item\.name\)/.test(clientSource) && /if \(nameZh\) sub\.push\(String\(item\.name\)\)/.test(clientSource),
