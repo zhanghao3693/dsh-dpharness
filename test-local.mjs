@@ -957,11 +957,15 @@ check("overlay: 手动关闭后整块浮窗不渲染", overlayHidden === "", JSO
 
 check("overlay: 关闭状态落盘（下次进来仍然是关的）", /HIDE_KEY = "dph-hub-hidden"/.test(clientSource) && /storeHidden\(/.test(clientSource));
 check(
-  "client: 侧边栏按钮只恢复显示、**不强行展开面板**（用户反馈：每点一次浮窗就自动打开）",
-  /if \(state\.hidden\) \{[\s\S]{0,160}setFloatVisible\(true, "footer"\)/.test(clientSource) && !/showHub/.test(clientSource),
+  "client: 侧边栏按钮只切显隐、**永远不展开面板**（用户反馈：每点一次浮窗就自动打开 → 不要每次点击都打开）",
+  /setFloatVisible\(!state\.hidden, "footer"\)/.test(clientSource) && !/showHub/.test(clientSource) && !/setHub\(\{ open: next \}\)/.test(clientSource),
 );
 check("client: 主动展开面板的入口**只剩右下角胶囊**（唯一且用户看得见）", (clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length === 1, String((clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length) + " 处");
-check("client: 隐藏态的按钮文案说准（「显示浮窗」而不是模糊的「打开」）", clientSource.includes('t(state.hidden ? "action.show" : "action.open")') && clientSource.includes('"action.show":'));
+check("client: 隐藏态的按钮文案说准（「显示浮窗」而不是模糊的「打开」）", clientSource.includes('t(state.hidden ? "action.show" : "action.hide")') && clientSource.includes('"action.show":'));
+check(
+  "client: 「分类精选」大类默认全部收起（用户反馈：默认折叠，别第一个就展开挡路）",
+  !/open: index === 0/.test(clientSource) && /"dph_bestCat", key: cat\.key \|\| String\(index\), open: false/.test(clientSource),
+);
 check("client: 面板底部也给「隐藏浮窗」出口", clientSource.includes('hideHub("panel")'));
 check("client: 关闭动作单独埋点（否则不知道这功能有没有人用）", clientSource.includes('action: "hide"') && clientSource.includes('action: "show"'));
 localStorage.removeItem("dph-hub-hidden");
