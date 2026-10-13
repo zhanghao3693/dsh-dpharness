@@ -954,14 +954,39 @@ check(
 localStorage.setItem("dph-hub-hidden", "1");
 const overlayHidden = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["shell.overlay"], {}));
 check("overlay: 手动关闭后整块浮窗不渲染", overlayHidden === "", JSON.stringify(overlayHidden.slice(0, 60)));
+/* 2026-10-13：按钮提示随状态说准 —— 关掉了就说"怎么恢复"，可见时才说"展开/收起"。
+   不能点了没反应还写着「显示浮窗」。走真实渲染，不是源码匹配。 */
+const footClosedTip = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["sidebar.footer.action"], {}));
+check("footer: 浮窗关闭后提示改说「怎么恢复」（不再写着「显示浮窗」—— 点了没反应不能撒谎）", footClosedTip.includes('title="action.closedHint"'), footClosedTip.slice(0, 140));
+localStorage.removeItem("dph-hub-hidden");
+const footOpenTip = renderToStaticMarkup(react.createElement(slotsOf(loadFreshClient())["sidebar.footer.action"], {}));
+check("footer: 浮窗可见（面板收起）时提示「展开面板」", footOpenTip.includes('title="action.expand"'), footOpenTip.slice(0, 140));
 
 check("overlay: 关闭状态落盘（下次进来仍然是关的）", /HIDE_KEY = "dph-hub-hidden"/.test(clientSource) && /storeHidden\(/.test(clientSource));
 check(
-  "client: 侧边栏按钮只切显隐、**永远不展开面板**（用户反馈：每点一次浮窗就自动打开 → 不要每次点击都打开）",
-  /setFloatVisible\(!state\.hidden, "footer"\)/.test(clientSource) && !/showHub/.test(clientSource) && !/setHub\(\{ open: next \}\)/.test(clientSource),
+  "client: 浮窗关闭后侧边栏按钮**不恢复**（用户反馈：胶囊关闭了就别默认打开）—— 隐藏态直接 return，全文再无 footer 范围的 setFloatVisible",
+  /if \(state\.hidden\) return;/.test(clientSource) && !/setFloatVisible\([^)]*"footer"\)/.test(clientSource),
 );
-check("client: 主动展开面板的入口**只剩右下角胶囊**（唯一且用户看得见）", (clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length === 1, String((clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length) + " 处");
-check("client: 隐藏态的按钮文案说准（「显示浮窗」而不是模糊的「打开」）", clientSource.includes('t(state.hidden ? "action.show" : "action.hide")') && clientSource.includes('"action.show":'));
+check(
+  "client: 侧边栏按钮只在浮窗**可见**时开关面板（隐藏态先 return，可见态 toggle 面板，不再 hideHub、不再叫回胶囊）",
+  /if \(state\.hidden\) return;/.test(clientSource) && /const next = !state\.open;/.test(clientSource) && /setHub\(\{ open: next \}\)/.test(clientSource),
+);
+check("client: 主动展开面板的入口只有两个用户点击：右下角胶囊 + 侧边栏按钮（后者仅浮窗可见时）", (clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length === 1 && /setHub\(\{ open: next \}\)/.test(clientSource), String((clientSource.match(/setHub\(\{ open: true \}\)/g) || []).length) + " 处");
+check(
+  "client: FooterEntry 里 useUpdates() 只调一次（它是 hook：重复调用会双份触发更新检查，而 SSR 渲染查不出来）",
+  (() => {
+    const seg = clientSource.slice(clientSource.indexOf("function FooterEntry"), clientSource.indexOf("function OverlayEntry"));
+    return (seg.match(/useUpdates\(\)/g) || []).length === 1;
+  })(),
+);
+check(
+  "client: 按钮提示随状态说准（关掉了说怎么恢复、可见时说展开/收起 —— 不能点了没反应还写着「显示浮窗」）",
+  clientSource.includes('t("action.closedHint")') && clientSource.includes('t("action.expand")') && !/t\(state\.hidden \? "action\.show"/.test(clientSource),
+);
+check(
+  "client: 隐藏提示与设置提示不再拿侧边栏按钮当恢复入口（它已经不恢复了，文案不能撒谎）",
+  !/可再次打开/.test(clientSource) && !/永远可以再次打开/.test(clientSource) && clientSource.includes('"action.closedHint"'),
+);
 check(
   "client: 「分类精选」大类默认全部收起（用户反馈：默认折叠，别第一个就展开挡路）",
   !/open: index === 0/.test(clientSource) && /"dph_bestCat", key: cat\.key \|\| String\(index\), open: false/.test(clientSource),
