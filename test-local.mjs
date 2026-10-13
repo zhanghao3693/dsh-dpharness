@@ -1113,6 +1113,32 @@ check(
   "client: 浮窗与页签都接了对比条（选择集共享，展开状态各自记）",
   (clientSource.match(/h\(CompareBar, \{ key: "cmpBar", open: comparing/g) || []).length === 2 && (clientSource.match(/const \[comparing, setComparing\]/g) || []).length === 2,
 );
+
+/* --- v0.5.0 P2：收藏待装 + 福利专区入口 --- */
+check(
+  "client: 收藏存的是**条目快照**（只留渲染与安装要用的字段），不是包名引用 —— 目录会变",
+  /FAV_KEY = "dph-hub-fav"/.test(clientSource) && /const FAV_FIELDS = \[/.test(clientSource) && /FAV_FIELDS\.forEach/.test(clientSource),
+);
+check(
+  "client: 收藏与对比语义相反（收藏跨会话持久、对比不持久）—— 两套状态不能混用一个 key",
+  /fav: readFav\(\)/.test(clientSource) && /compare: \[\]/.test(clientSource) && !/readFav\(\)\)[^\n]*compare/.test(clientSource),
+);
+check(
+  "client: 收藏清单落在「我的插件」里，不开第 6 个页签（浮窗 400px 一排标签挤不下）",
+  /function FavSection\(props\) \{/.test(clientSource) && /h\(FavSection, \{ key: "fav"/.test(clientSource),
+);
+check(
+  "client: 收藏的批量装复用「一键安装整套」那台机器（内部保留 slug，不与套装进度混淆）",
+  /slug: "__fav__"/.test(clientSource) && /runSetInstall\(\{ slug: "__fav__"/.test(clientSource),
+);
+check(
+  "client: 只有「有 npm 包名且本机还没装」的收藏才进批量（没 pkg 的走逐条复制命令）",
+  /item\.pkg && !installed\.has\(String\(item\.pkg\)\)/.test(clientSource) && /pending\.length >= 2/.test(clientSource),
+);
+check(
+  "client: 福利入口只做链接、不复刻清单（公开接口只有未审核的爬虫候选池，把没核过的推给用户是错的）",
+  /SITE \+ "\/benefits"/.test(clientSource) && !clientSource.includes("/api/benefits"),
+);
 check(
   "client: 安装失败区分阶段与原因（升级走自己的失败事件名）",
   /fail: "install_failed"/.test(clientSource)
