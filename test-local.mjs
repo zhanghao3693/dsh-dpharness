@@ -1331,7 +1331,11 @@ check("client: 复制升级命令单独埋点", clientSource.includes('action: "
 check("client: 只在确实有新版本时上报（把「已最新」也报进来会撑大分母）", /if \(body\.outdated === true\) \{/.test(clientSource));
 
 /* --- v0.5.0：更新检查 + 红点 --- */
-check("tab: 视图切换多了「更新」", tabHtml.includes("updates.tab"), tabHtml.includes("updates.tab") ? "有" : "无");
+check("tab: 视图切换里有「我的插件」（原「更新」）", tabHtml.includes("updates.tab"), tabHtml.includes("updates.tab") ? "有" : "无");
+check(
+  "tab: 「更新」已改名「我的插件」（它现在管的是整屏插件，不只是更新）",
+  clientSource.includes('"updates.tab": "我的插件"') && clientSource.includes('"updates.title": "我的插件"'),
+);
 check("client: 更新检查读本机 host 的只读接口", clientSource.includes('"/api/dpharness/updates"'));
 check("client: 更新结果是模块级共享 store（三处红点 + 视图共用一次请求）", /const updates = \{ loading/.test(clientSource) && /function useUpdates\(\)/.test(clientSource));
 check(
