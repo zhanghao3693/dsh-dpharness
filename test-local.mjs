@@ -821,6 +821,30 @@ check("client: 精确锁定的行标出来并说明原因", clientSrcUpd.include
 check("client: 本地链接单列并说清「为什么不在列表里」", clientSrcUpd.includes('t("updates.locals")') && clientSrcUpd.includes('t("updates.localsNote")'));
 check("client: 装完刷新清单（否则行上还是旧版本号，用户判定「升级没成功」）", /loadUpdates\(true\);/.test(clientSrcUpd) && (clientSrcUpd.match(/loadUpdates\(true\)/g) || []).length >= 3);
 check("host: 安装成功后作废更新缓存（否则刷新拿到的还是装之前那份清单）", /updatesCache = \{ at: 0, value: null \};/.test(fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8")));
+
+/* --- v0.5.0 卸载：与安装共用同一条通道，只换 verb（add | remove）---
+   不在这里真跑 POST：那会 spawn 一个真的 `dsh plugin remove`，测试机上的插件会被卸掉。
+   所以钉的是「同一条通道 + verb 闭集 + 三态不谎报」。 */
+const hostSrcRemove = fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
+const rmJob = mockRes();
+await routes["/api/dpharness/install"]({ method: "GET", url: "/api/dpharness/install" }, rmJob);
+check(
+  "remove: job 视图带 verb（界面据此分辨是装还是卸）",
+  !!(rmJob.out.body.job && "verb" in rmJob.out.body.job),
+  JSON.stringify(rmJob.out.body.job && rmJob.out.body.job.verb),
+);
+check(
+  "remove: 与安装共用同一条 spawn（只把 add 换成 installJob.verb，不另写一套）",
+  /"plugin", "--profile", PROFILE, installJob\.verb, target/.test(hostSrcRemove),
+);
+check(
+  "remove: verb 是闭集（只认 remove，其余一律按 add，不接受未枚举动作）",
+  /input\.verb === "remove" \? "remove" : "add"/.test(hostSrcRemove),
+);
+check(
+  "remove: 三态公式对装卸都成立（changed 卸掉了 / same 还在 / none 本来就没装）",
+  /installJob\.before === installJob\.after \? "same" : "changed"/.test(hostSrcRemove) && /installJob\.verb = verb === "remove" \? "remove" : "add"/.test(hostSrcRemove),
+);
 check(
   "client: 三态如实报 —— changed 装上 / same **本来就是这版**（是成功）/ none 什么都没发生",
   clientSrcUpd.includes('t("updates.noChangeTitle")') && clientSrcUpd.includes('t("updates.alreadyTitle")')
@@ -1024,6 +1048,44 @@ check(
 check(
   "client: 套装内必要性说人话（必备/增强/可选），不把 required 直接摊给用户",
   clientSource.includes('t("need." + (item.need || "enhance"))') && clientSource.includes('"need.required": "必备"'),
+);
+
+/* --- v0.5.0 「我的插件中心」：卸载 + 忽略此版本 --- */
+check(
+  "client: 卸载走同一条本地通道（verb=remove），破坏性操作自己两步确认",
+  /verb: "remove"/.test(clientSource) && /t\("updates\.removeConfirm"\)/.test(clientSource) && /action: "remove_ask"/.test(clientSource) && /action: "remove_cancel"/.test(clientSource),
+);
+check(
+  "client: 卸载成功也记待重启（当前进程里插件还挂着，与安装同一条横幅）",
+  /if \(done\.ok && done\.changed\) \{[\s\S]{0,160}?markRestartPending/.test(clientSource),
+);
+check(
+  "client: 自插件那一行不给卸载（卸自己 = 把管理界面卸掉）",
+  /updateRow\(self, "self"/.test(clientSource) && /updateRow\(item, item\.name, "", copied, mark, true\)/.test(clientSource),
+);
+check(
+  "client: 忽略的是**目标版本**不是布尔（出了更新的版本，提醒自己回来）",
+  /IGNORE_KEY = "dph-hub-ignore"/.test(clientSource) && /version === String\(item\.latest \|\| ""\)/.test(clientSource),
+);
+check(
+  "client: 被忽略的条目不进红点签名（否则「忽略」之后红点照常亮，等于没忽略）",
+  /data\.self\.outdated === true && !isIgnored\(data\.self\)/.test(clientSource) && /item\.outdated === true && !isIgnored\(item\)/.test(clientSource),
+);
+check(
+  "client: 一键安装整套复用批量那台机器（串行/进度/可中止/两步确认），不另写并发",
+  /async function runSetInstall/.test(clientSource) && /scope: "set"/.test(clientSource) && /action: "set_install_ask"/.test(clientSource) && /stopRequested: true/.test(clientSource),
+);
+check(
+  "client: 安装整套的两步确认会先说清「会改 profile、要重启」",
+  clientSource.includes('"sets.installAllConfirm": "将逐个安装 {n} 个插件'),
+);
+check(
+  "client: 批量文案按 kind 分开（套装在装的时候，别在更新视图里说成「升级中」）",
+  /batch\.kind === "install" \? t\("sets\.installing"\) : t\("updates\.batchProgress"\)/.test(clientSource),
+);
+check(
+  "client: 待重启横幅文案动词中性（装卸共用一条横幅，不能写死「已安装」）",
+  clientSource.includes('"install.pendingBody": "{n}：重启 dsh 后生效"'),
 );
 check(
   "client: 安装失败区分阶段与原因（升级走自己的失败事件名）",
