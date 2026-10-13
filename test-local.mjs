@@ -54,6 +54,107 @@ globalThis.fetch = async (url, options) => {
     if (!npmVersions.has(name)) return { ok: false, status: 404, json: async () => ({}) };
     return { ok: true, status: 200, json: async () => ({ version: npmVersions.get(name) }) };
   }
+  // 「套装」上游（站点 GET /api/sets）：结构与真实接口一致（方案 → 槽位条目）
+  if (String(url).includes("/api/sets")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        total: 2,
+        sets: [
+          {
+            slug: "dsh-newbie-starter",
+            name: "DSH 新手开箱套装",
+            summary: "刚装完 DSH 不知道装什么？先补齐日常底座。",
+            audience: "DSH 新用户 / 从零搭建",
+            sceneLabel: "新手入门",
+            itemCount: 2,
+            risk: { level: "medium", label: "扫描：含敏感能力", desc: "", source: "auto" },
+            syncedMonth: "2026-10",
+            syncedSlots: 3,
+            syncedReplaced: 0,
+            conflictNote: "两个插件都会改侧边栏，先装底座再装扩展。",
+            steps: "1. 先装底座\n2. 再装增强",
+            exampleParams: null,
+            effectNote: null,
+            url: "/sets/dsh-newbie-starter",
+            items: [
+              {
+                slotRole: "侧栏工作台",
+                tier: "required",
+                pluginTier: "core",
+                subKey: "sidebar",
+                fullName: "omdsh-dev/DSH-better-sidebar",
+                name: "DSH-better-sidebar",
+                nameZh: "可扩展侧边栏工作台",
+                tagline: "已适配 DSH 原生侧边栏 API，右列就是工作台",
+                descriptionZh: null,
+                stars: 3628,
+                weeklyDownloads: 12800,
+                verifyStatus: "pass",
+                testedStatus: null,
+                installCheck: { status: "pass", pkgName: "dsh-better-sidebar" },
+                risk: null,
+              },
+              {
+                slotRole: "通用客户端桥接",
+                tier: "enhance",
+                pluginTier: "related",
+                subKey: null,
+                fullName: "koishi-dev/koishi-dsh",
+                name: "koishi-dsh",
+                nameZh: null,
+                tagline: null,
+                descriptionZh: null,
+                stars: 512,
+                weeklyDownloads: null,
+                verifyStatus: "pass",
+                testedStatus: null,
+                installCheck: null,
+                risk: null,
+              },
+            ],
+          },
+          {
+            slug: "dsh-ocr-vision",
+            name: "本地 AI 识图 OCR 套装",
+            summary: "让 DSH 真正看得见。",
+            audience: null,
+            sceneLabel: null,
+            itemCount: 1,
+            risk: null,
+            syncedMonth: null,
+            syncedSlots: null,
+            syncedReplaced: null,
+            conflictNote: null,
+            steps: null,
+            exampleParams: null,
+            effectNote: null,
+            url: "/sets/dsh-ocr-vision",
+            items: [
+              {
+                slotRole: "识图",
+                tier: "required",
+                pluginTier: "core",
+                subKey: "vision",
+                fullName: "lispking/dsh-image-gen",
+                name: "dsh-image-gen",
+                nameZh: "像素级识图插件",
+                tagline: null,
+                descriptionZh: "像素级识图",
+                stars: 233,
+                weeklyDownloads: 900,
+                verifyStatus: "pass",
+                testedStatus: null,
+                installCheck: { status: "warn", pkgName: null },
+                risk: null,
+              },
+            ],
+          },
+        ],
+      }),
+    };
+  }
   // 「分类精选」上游（站点 GET /api/best）：结构与真实接口一致（大类→小类→条目）
   if (String(url).includes("/api/best")) {
     return {
@@ -170,7 +271,7 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册八条路由", Object.keys(routes).length === 8, Object.keys(routes).join(", "));
+check("host: 注册九条路由", Object.keys(routes).length === 9, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -371,6 +472,48 @@ const best405 = mockRes();
 await routes["/api/dpharness/best"]({ method: "POST", url: "/api/dpharness/best" }, best405);
 check("best: 非 GET → 405", best405.out.status === 405, "status=" + best405.out.status);
 
+/* --- v0.5.0 套装（站点 /sets 同源）：跨插件纵向组合 ---
+   与 best 的分工是「纵向 vs 横向」；命令同样必须由本机拼装（不能抄站点的 --profile web）。 */
+const setsRes = mockRes();
+await routes["/api/dpharness/sets"]({ method: "GET", url: "/api/dpharness/sets" }, setsRes);
+const setsBody = setsRes.out.body;
+check("sets: 200 + 方案数", setsRes.out.status === 200 && setsBody.total === 2, `status=${setsRes.out.status} total=${setsBody.total}`);
+const starter = (setsBody.sets || [])[0];
+check(
+  "sets: 方案元数据齐全（名称/摘要/人群/冲突提示/同步期次）",
+  !!starter && starter.name === "DSH 新手开箱套装" && !!starter.summary && !!starter.audience && !!starter.conflictNote && starter.syncedMonth === "2026-10",
+  starter && JSON.stringify({ name: starter.name, month: starter.syncedMonth }),
+);
+check(
+  "sets: 条目走同一个 slim()（命令用本机 profile，与 best 同一条口径）",
+  starter && starter.items[0].cmd === "dsh plugin --profile web add dsh-better-sidebar" && starter.items[0].pkg === "dsh-better-sidebar",
+  starter && starter.items[0].cmd,
+);
+check(
+  "sets: 相关生态（pluginTier=related）走 git clone —— 与站点 installCmd 同口径",
+  starter && starter.items[1].cmd === "git clone https://github.com/koishi-dev/koishi-dsh.git",
+  starter && starter.items[1].cmd,
+);
+check(
+  "sets: 批量命令 = 逐条命令按安装顺序换行拼接（不在客户端拼、也不抄站点字符串）",
+  starter && starter.installBlock === `${starter.items[0].cmd}\n${starter.items[1].cmd}`,
+  starter && starter.installBlock.replace(/\n/g, " / "),
+);
+check(
+  "sets: 套装必要性（need）与插件生态分层（tier）不混用（同名不同义，传输层已把后者改名 pluginTier）",
+  starter && starter.items[0].need === "required" && starter.items[0].tier === "core" && starter.items[1].tier === "related",
+  starter && JSON.stringify({ need: starter.items[0].need, tier: starter.items[0].tier, tier2: starter.items[1].tier }),
+);
+check("sets: 槽位职责原样带出（滚动槽位每月换人，界面按「这个位置干什么」渲染）", starter && starter.items[0].slotRole === "侧栏工作台", starter && starter.items[0].slotRole);
+check(
+  "sets: npm 归属未通过校验的条目仍给 owner/repo 命令（不能不给命令）",
+  setsBody.sets[1] && setsBody.sets[1].items[0].cmd === "dsh plugin --profile web add lispking/dsh-image-gen",
+  setsBody.sets[1] && setsBody.sets[1].items[0].cmd,
+);
+const sets405 = mockRes();
+await routes["/api/dpharness/sets"]({ method: "POST", url: "/api/dpharness/sets" }, sets405);
+check("sets: 非 GET → 405", sets405.out.status === 405, "status=" + sets405.out.status);
+
 const outboundBeforeInstall = sent.length;
 
 const installGet = mockRes();
@@ -395,7 +538,7 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出八条路由", metaRoutes.out.body.routes.length === 8, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出九条路由", metaRoutes.out.body.routes.length === 9, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
@@ -858,6 +1001,30 @@ check("client: 只有 409 不降级（busy 仍是硬失败）", /market\.status 
 check("client: 旧的「其他状态码一律硬失败」已移除（不再有 market_http）", !/"market_http"/.test(clientSource));
 check("client: 通道不可用要留痕（market_unavailable + http_<status>）", /action: "market_unavailable"/.test(clientSource) && /"http_" \+ market\.status/.test(clientSource));
 check("client: 复制与安装分别埋点（升级另设事件名，不混进安装漏斗）", clientSource.includes('"copy_install"') && clientSource.includes('start: "install"') && clientSource.includes('start: "upgrade"'));
+
+/* 套装视图（v0.5.0）：面板与页签两处必须同口径；命令一律用 host 给的，不在客户端拼。
+   （视图本体只在切到该 mode 时渲染，SSR 起手停在 search，所以这里钉的是接线与口径。） */
+check(
+  "client: 套装视图在两处都注册（浮窗 + 页签），标签同源",
+  (clientSource.match(/\{ value: "sets", label: t\("sets\.tab"\) \}/g) || []).length === 2,
+  String((clientSource.match(/\{ value: "sets", label: t\("sets\.tab"\) \}/g) || []).length) + " 处",
+);
+check(
+  "client: 套装只在切到它时才取数（与 best 同一条纪律：收成胶囊/别的视图都不请求）",
+  /useSets\(t, state\.open && mode === "sets"\)/.test(clientSource) && /useSets\(t, mode === "sets"\)/.test(clientSource),
+);
+check(
+  "client: 客户端**不拼任何安装命令**（一律用 host 给的 installBlock / item.cmd）",
+  clientSource.includes("set.installBlock") && !/dsh plugin --profile/.test(clientSource),
+);
+check(
+  "client: 套装的「打开站点/刷新」都跟着视图走（别让刷新按钮刷错东西）",
+  /isSets \? SITE \+ "\/sets"/.test(clientSource) && /isSets \? sets\.refresh/.test(clientSource),
+);
+check(
+  "client: 套装内必要性说人话（必备/增强/可选），不把 required 直接摊给用户",
+  clientSource.includes('t("need." + (item.need || "enhance"))') && clientSource.includes('"need.required": "必备"'),
+);
 check(
   "client: 安装失败区分阶段与原因（升级走自己的失败事件名）",
   /fail: "install_failed"/.test(clientSource)
