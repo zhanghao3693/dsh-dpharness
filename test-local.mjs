@@ -1687,5 +1687,63 @@ check(
   ),
 );
 
+/* --- v0.5.2：供应链策略拒绝（pnpm 内置 24 小时最小发布年龄） -----------------------
+   2026-10-14 实测：升级「免费搜索插件 0.8.9 → 0.8.10」报
+   `[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION] 3 lockfile entries failed verification`，
+   卡片上只有这行英文。下面用**真实抓到的原文**验证识别逻辑（照抄线上机读结果，不自己编）。 */
+const REAL_RELEASE_AGE = [
+  "[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION] 3 lockfile entries failed verification:",
+  "  dsh-connect-workbuddy@4.4.5 was published at 2026-10-13T20:06:51.203Z, within the minimumReleaseAge cutoff (2026-10-13T08:56:29.829Z)",
+  "  dsh-context@0.70.0 was published at 2026-10-13T23:50:35.000Z, within the minimumReleaseAge cutoff (2026-10-13T08:56:29.829Z)",
+  "  dsh-mnemon@0.5.29 was published at 2026-10-14T02:38:14.000Z, within the minimumReleaseAge cutoff (2026-10-13T08:56:29.829Z)",
+  "",
+  "The lockfile contains entries that the active policies reject. This can mean the lockfile is stale, …",
+].join("\n");
+const aged = host.releaseAgeFrom(REAL_RELEASE_AGE);
+check("供应链策略: 认得出这类拒绝并取出头部条数", aged !== null && aged.count === 3, JSON.stringify(aged && aged.count));
+check(
+  "供应链策略: 逐条取出包名/版本/发布时间（三条全取到）",
+  aged !== null && aged.entries.length === 3 && aged.entries[0].name === "dsh-connect-workbuddy" &&
+    aged.entries[0].version === "4.4.5" && aged.entries[0].publishedAt === "2026-10-13T20:06:51.203Z" &&
+    aged.entries[2].version === "0.5.29",
+  aged && JSON.stringify(aged.entries),
+);
+check(
+  "供应链策略: 带出 cutoff（界面用它算还要等多久）",
+  aged !== null && aged.cutoff === "2026-10-13T08:56:29.829Z",
+  aged && String(aged.cutoff),
+);
+check(
+  "供应链策略: scoped 包按最后一个 @ 切版本（@scope/name@1.2.3）",
+  (() => {
+    const one = host.releaseAgeFrom(
+      "[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION] 1 lockfile entry failed verification:\n  @liustack/modsearch@5.10.6 was published at 2026-10-14T01:00:00.000Z, within the minimumReleaseAge cutoff (2026-10-13T08:00:00.000Z)",
+    );
+    return one !== null && one.count === 1 && one.entries[0].name === "@liustack/modsearch" && one.entries[0].version === "5.10.6";
+  })(),
+);
+check("供应链策略: 别的错误不误判（普通 ERR_PNPM 与兼容性闸门都不算）", host.releaseAgeFrom("[ERR_PNPM_FETCH_404] GET https://registry.npmjs.org/x: Not Found - 404") === null && host.releaseAgeFrom("dsh: installation rejected: Plugin x@1 is incompatible with dsh 0.2.0") === null);
+check("供应链策略: 空值/undefined 不抛错", host.releaseAgeFrom(undefined) === null && host.releaseAgeFrom(null) === null);
+
+check(
+  "供应链策略: 宿主把它归成独立闭集原因（不是普通 cli_exit）",
+  /why = "release-age"/.test(indexSource) && /installJob\.reject = aged/.test(indexSource),
+);
+check(
+  "供应链策略: 安装与状态轮询两侧都认这个原因（否则卡片上还是英文原文）",
+  (clientSource.match(/release-age/g) || []).length >= 3,
+  String((clientSource.match(/release-age/g) || []).length) + " 处",
+);
+check(
+  "供应链策略: 文案中英各一份，且等待时间用 {h}（不跟条数 {n} 撞占位符）",
+  ["updates.releaseAgeTitle", "updates.releaseAgeBody", "updates.releaseAgeHow"].every(
+    (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
+  ) && /releaseAgeHow"[\s\S]{0,40}\{h\}/.test(clientSource),
+);
+check(
+  "供应链策略: 剩余时间按「最新一条发布时间 + 24h」算（不足 1 小时显示 1，不出现「约 0 小时」）",
+  /latest \+ 24 \* 60 \* 60 \* 1000 - Date\.now\(\)/.test(clientSource) && /Math\.max\(1, Math\.ceil/.test(clientSource),
+);
+
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
 process.exit(failures === 0 ? 0 : 1);

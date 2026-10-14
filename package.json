@@ -1,7 +1,7 @@
 {
   "name": "dsh-dpharness",
   "icon": "./icon.svg",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Curated dpharness.com plugin catalog inside the DeepSeek Harness Web GUI: a conversation-view tab, a sidebar entry and a dismissible site-wide floating panel, offering a searchable full catalog, a monthly by-category shortlist, a daily pick and an update check (this plugin plus every installed plugin) with a red-dot reminder, with one-click install via dshmarket or the dsh CLI. Includes a settings page (General row + Plugins tab) for the widget visibility, the daily pick, the update check and the opt-out telemetry relay covering the full install funnel.",
   "author": "zhanghao3693 <zhanghao3693@qq.com>",
   "repository": {
