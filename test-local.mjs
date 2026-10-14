@@ -660,11 +660,14 @@ await routes["/api/dpharness/changelog"]({ method: "POST", url: "/api/dpharness/
 check("changelog 路由: 非 GET → 405", cl405.out.status === 405, "status=" + cl405.out.status);
 
 /* 路由场景二：「确实有新版」。必须换一个**新的 host 实例** ——
-   结果是 5 分钟缓存的，同一实例里第二次调用只会拿到上一次的缓存，那会掩盖真实分支。 */
+   结果是 5 分钟缓存的，同一实例里第二次调用只会拿到上一次的缓存，那会掩盖真实分支。
+   ⚠️ 这里的"新版"版本号**从当前版本推导**，不写死：写死的话每次发版都会把这条用例
+   变成假失败（2026-10-14 发 0.5.1 时踩到 —— 夹具停在 0.5.1，而它已不再是"更高版本"）。 */
+const NEXT_VERSION = host.VERSION.replace(/(\d+)$/, (digits) => String(Number(digits) + 1));
 changelogUpstream = {
-  releases: [{ tag_name: "v0.5.1", published_at: "2026-10-20T00:00:00Z", name: "0.5.1", body: "- 远端发布说明", draft: false }],
+  releases: [{ tag_name: "v" + NEXT_VERSION, published_at: "2026-10-20T00:00:00Z", name: NEXT_VERSION, body: "- 远端发布说明", draft: false }],
 };
-npmVersions.set("dsh-dpharness", "0.5.1");
+npmVersions.set("dsh-dpharness", NEXT_VERSION);
 const hostFresh = await import("./lib/index.js?fresh=changelog");
 const routesFresh = {};
 hostFresh.apply({
@@ -675,7 +678,7 @@ const clFresh = mockRes();
 await routesFresh["/api/dpharness/changelog"]({ method: "GET", url: "/api/dpharness/changelog" }, clFresh);
 const clFreshBody = clFresh.out.body;
 check("changelog 路由: 有 Release → source=builtin+github", clFreshBody.source === "builtin+github", clFreshBody.source);
-check("changelog 路由: npm 有更高版本 → outdated=true 且带出该版本号", clFreshBody.outdated === true && clFreshBody.latest === "0.5.1", JSON.stringify({ outdated: clFreshBody.outdated, latest: clFreshBody.latest }));
+check("changelog 路由: npm 有更高版本 → outdated=true 且带出该版本号", clFreshBody.outdated === true && clFreshBody.latest === NEXT_VERSION, JSON.stringify({ outdated: clFreshBody.outdated, latest: clFreshBody.latest }));
 check("changelog 路由: 远端同版本覆盖内置正文", (clFreshBody.entries[0].items || []).includes("远端发布说明"), JSON.stringify(clFreshBody.entries[0].items));
 changelogUpstream = { releases: [] };
 npmVersions.clear();
@@ -1618,6 +1621,70 @@ const longNoise = "x".repeat(570);
 check(
   "脱敏: 截断与脱敏的顺序正确（token 落在 600 字窗口里要被完整替换）",
   !host.redactSecrets(longNoise + " _authToken=npm_FAKEFAKEFAKEFAKE1234567890").includes("FAKEFAKEFAKEFAKE"),
+);
+
+/* --- v0.5.1：安装卡死自愈（2026-10-14 用户实测事故） ------------------------------
+   事故形状：宿主超时后只 kill **直系**子进程 → 真正干活的 pnpm **孙进程**活下来 →
+   孙进程攥着管道，直系子进程的 close 永不触发 → 而 active 的唯一复位点就在 close 里
+   ⇒ active 永久为 true，此后每一次安装都被守卫拦成 409；界面只有一句英文，用户无路可走
+   （现场实测卡死 36 分钟，连"卸载"都做不了）。
+   下面把「不再可能卡死」的每一环都钉住，并验两条确定行为。 */
+const indexSource = fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
+check(
+  "install: close 不再是 active 的唯一复位点（超时路径必须自己解锁）",
+  /killInstallTree\(\);[\s\S]{0,400}?forceUnlock\("timeout", seq\)/.test(indexSource),
+);
+check(
+  "install: exit 也兜底解锁（进程退了、管道被孙进程攥着 ⇒ close 会缺席）",
+  /child\.on\("exit"/.test(indexSource) && /forceUnlock\("exit-without-close", seq\)/.test(indexSource),
+);
+check(
+  "install: 子进程自成进程组，超时按组杀（只杀直系 = 杀不掉真正干活的孙进程）",
+  /detached: true/.test(indexSource) && /process\.kill\(-child\.pid, "SIGKILL"\)/.test(indexSource),
+);
+check(
+  "install: 迟到的计时器不会解开下一个任务（延迟收尾一律比对 seq）",
+  /seq !== installSeq\) return false/.test(indexSource) && /forceUnlock\("timeout", seq\)/.test(indexSource),
+);
+check(
+  "install: 明显超时没收尾的任务由宿主自愈（不逼用户重启 dsh）",
+  /elapsed > INSTALL_TIMEOUT_MS \+ INSTALL_SETTLE_MS/.test(indexSource) && /forceUnlock\("stale", installSeq\)/.test(indexSource),
+);
+check(
+  "install: 409 带 why 闭集与已跑秒数（界面据此出中文，不摊英文原文）",
+  /error: "an install is already running"/.test(indexSource) && /why: "busy"/.test(indexSource) && /seconds: Math\.round\(elapsed \/ 1000\)/.test(indexSource),
+);
+check(
+  "install: 超时解锁要补读磁盘（超时 ≠ 什么都没发生，本轮事故正是已装成功却报失败）",
+  /forceUnlock\(reason, seq\) \{[\s\S]{0,900}?installedVersionOf\(installJob\.pkg\)/.test(indexSource),
+);
+check(
+  "forceUnlock: 序号不符时不动手（迟到的计时器必须是无害的）",
+  host.forceUnlock("late", 99999) === false,
+);
+check("forceUnlock: 没有在跑的任务时是空操作（不抛错、不改状态）", host.forceUnlock("nothing-running") === false);
+
+check(
+  "client: 409 走中文 busy 文案（不再把英文原文摊到卡片上）",
+  /format\(t\("install\.busySince"\), \{ n: busySeconds \}\)/.test(clientSource) &&
+    /why === "busy"[\s\S]{0,120}?messageOf\(local, t\("install\.failed"\)\)/.test(clientSource),
+);
+check(
+  "client: 安装与卸载共用同一份 busy 口径（两条通道不许各说各话）",
+  (clientSource.match(/install\.busySince/g) || []).length === 4,
+  String((clientSource.match(/install\.busySince/g) || []).length) + " 处（zh/en 各 1 + 两处调用）",
+);
+check(
+  "client: 超时文案区分「真失败」与「其实已升级」（后者不该被读成什么都没发生）",
+  /job\.error === "timeout"/.test(clientSource) &&
+    /job\.outcome === "changed"/.test(clientSource) &&
+    /install\.timeoutChanged/.test(clientSource),
+);
+check(
+  "client: 三个新词条中英各一份（少一份就是半边界面漏文案）",
+  ["install.busySince", "install.timeout", "install.timeoutChanged"].every(
+    (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
+  ),
 );
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
