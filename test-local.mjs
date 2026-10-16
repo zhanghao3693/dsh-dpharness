@@ -271,7 +271,7 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册九条路由", Object.keys(routes).length === 9, Object.keys(routes).join(", "));
+check("host: 注册十条路由", Object.keys(routes).length === 10, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -538,7 +538,7 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出九条路由", metaRoutes.out.body.routes.length === 9, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出十条路由", metaRoutes.out.body.routes.length === 10, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
@@ -1827,7 +1827,7 @@ check(
 );
 check(
   "client: 使用视图词条中英各一份",
-  ["usage.summary", "usage.core", "usage.common", "usage.occasional", "usage.silent", "usage.disabled", "usage.unmeasurable", "usage.unknown", "usage.calls30d", "usage.stats", "usage.today", "usage.yesterday", "usage.daysAgo", "usage.silentNote", "usage.unmeasurableNote", "usage.unknownNote", "usage.keep", "usage.kept", "usage.keepHint", "usage.onlySuggest", "usage.sortUsage", "usage.sortUsageOn", "usage.noneSuggest"].every(
+  ["usage.summary", "usage.core", "usage.common", "usage.occasional", "usage.silent", "usage.disabled", "usage.unmeasurable", "usage.unknown", "usage.calls30d", "usage.stats", "usage.today", "usage.yesterday", "usage.daysAgo", "usage.silentNote", "usage.unmeasurableNote", "usage.unknownNote", "usage.keep", "usage.kept", "usage.keepHint", "usage.onlySuggest", "usage.sortUsage", "usage.sortUsageOn", "usage.noneSuggest", "usage.disable", "usage.enable", "usage.disableConfirm", "usage.enableConfirm", "usage.toggleHint", "usage.toggling", "usage.disabledDone", "usage.enabledDone", "usage.toggleFailed", "usage.toggleOverridden", "usage.toggleSelf", "usage.toggleReadonly", "usage.toggleUnaddressable", "usage.toggleUnsupported", "usage.batchDisable", "usage.batchConfirm", "usage.batchProgress", "usage.batchDone", "usage.batchHint"].every(
     (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
   ),
 );
@@ -1844,6 +1844,93 @@ check(
     return /node:zlib/.test(src) && !/fetch\(/.test(src) && !/https?:\/\//.test(src);
   })(),
 );
+
+/* --- v0.6.0：启用/禁用路由（注入 fake pluginManager；含三态与全部拒绝码） ---------
+   契约来自运行时 dsh-plugin-manager：id 必须是 listPlugins 的 entryId；
+   只读行/多重入口交给它自己拒绝，本路由负责翻译成 code 并**复读真值**。 */
+{
+  const toggleRoute = routes["/api/dpharness/toggle"];
+  const noSvc = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: "dsh-context", enabled: false }), noSvc);
+  check(
+    "toggle: 无 pluginManager 服务 → 501 unsupported（三态：明说「不支持」，不冒充失败）",
+    noSvc.out.status === 501 && noSvc.out.body && noSvc.out.body.code === "unsupported",
+    JSON.stringify(noSvc.out),
+  );
+
+  const calls = [];
+  const fakeRows = [
+    { entryId: "e1", moduleName: "dsh-context", enabled: true },
+    { entryId: "e2", moduleName: "dsh-mnemon", enabled: false },
+    { entryId: "e3", moduleName: "dup", enabled: true },
+    { entryId: "e4", moduleName: "dup", enabled: true },
+    { entryId: "e5", moduleName: "ro", enabled: true, readOnlyReason: "management-required" },
+  ];
+  const fakeManager = {
+    async listPlugins() { return fakeRows.map((row) => ({ ...row })); },
+    async setPluginEnabled(id, enabled) {
+      calls.push([id, enabled]);
+      const row = fakeRows.find((item) => item.entryId === id);
+      if (!row) { const error = new Error("unknown-plugin"); error.code = "unknown-plugin"; throw error; }
+      if (row.readOnlyReason) { const error = new Error(row.readOnlyReason); error.code = row.readOnlyReason; throw error; }
+      row.enabled = enabled === true;
+    },
+  };
+  ctx.get = (name) => (name === "pluginManager" ? fakeManager : undefined);
+
+  const d1 = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: "dsh-context", enabled: false }), d1);
+  check(
+    "toggle: 禁用成功（entryId 交给 setPluginEnabled，响应复读真值）",
+    d1.out.status === 200 && d1.out.body.ok === true && d1.out.body.enabled === false && d1.out.body.changed === true
+      && calls.length === 1 && calls[0][0] === "e1" && calls[0][1] === false,
+    JSON.stringify(d1.out.body) + " calls=" + JSON.stringify(calls),
+  );
+
+  const d2 = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: "dsh-mnemon", enabled: false }), d2);
+  check(
+    "toggle: 目标状态已达成 → changed=false 且不重复调用",
+    d2.out.status === 200 && d2.out.body.changed === false && calls.length === 1,
+    JSON.stringify(d2.out.body),
+  );
+
+  const d3 = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: "dsh-mnemon", enabled: true }), d3);
+  check("toggle: 启用成功", d3.out.status === 200 && d3.out.body.enabled === true && calls.length === 2, JSON.stringify(d3.out.body));
+
+  const self = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: host.PKG_NAME, enabled: false }), self);
+  check("toggle: 拒绝禁自己（400 self）", self.out.status === 400 && self.out.body.code === "self");
+
+  const nf = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: "ghost", enabled: false }), nf);
+  check("toggle: 未找到 → 404", nf.out.status === 404 && nf.out.body.code === "not-found");
+
+  const amb = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: "dup", enabled: false }), amb);
+  check("toggle: 同名多入口 → 409 ambiguous", amb.out.status === 409 && amb.out.body.code === "ambiguous");
+
+  const ro = mockRes();
+  await toggleRoute(mockReq("POST", "/api/dpharness/toggle", { name: "ro", enabled: false }), ro);
+  check(
+    "toggle: 只读行 → 409 且带 code（界面据此出中文，不摊英文原文）",
+    ro.out.status === 409 && ro.out.body.code === "management-required",
+    JSON.stringify(ro.out.body),
+  );
+
+  const g405 = mockRes();
+  await toggleRoute({ method: "GET", url: "/api/dpharness/toggle" }, g405);
+  check("toggle: 非 POST → 405", g405.out.status === 405);
+
+  check(
+    "client: 启停按钮的失败码都有对应中文文案（含 unsupported / 只读 / 定位不到）",
+    ["usage.toggleUnsupported", "usage.toggleReadonly", "usage.toggleUnaddressable", "usage.toggleOverridden", "usage.toggleSelf"].every(
+      (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
+    ),
+  );
+  delete ctx.get;
+}
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
 process.exit(failures === 0 ? 0 : 1);
