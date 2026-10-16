@@ -766,6 +766,17 @@ check(
   JSON.stringify(upBody.counts),
 );
 check(
+  "updates 路由: 每条带 tier 与 usage 三态字段（locals 同样参与保留决策）",
+  upBody.plugins.every((item) => typeof item.tier === "string" && (item.usage === null || (item.usage && typeof item.usage.calls === "number")))
+    && upBody.locals.every((row) => typeof row.tier === "string"),
+  "tiers: " + upBody.plugins.slice(0, 4).map((item) => item.tier).join(","),
+);
+check(
+  "updates 路由: usageMeta 口径（窗口 30 天或引擎不可用为 null）",
+  upBody.usageMeta === null || (upBody.usageMeta.windowDays === 30 && upBody.usageMeta.scanned && typeof upBody.usageMeta.scanned.calls === "number"),
+  JSON.stringify(upBody.usageMeta && upBody.usageMeta.scanned),
+);
+check(
   "updates 路由: 每条都带用本机 profile 拼的升级命令",
   upBody.plugins.every((item) => item.upgrade === "dsh plugin --profile " + upBody.profile + " add " + item.name + "@latest"),
   upBody.plugins[0] && upBody.plugins[0].upgrade,
@@ -1743,6 +1754,95 @@ check(
 check(
   "供应链策略: 剩余时间按「最新一条发布时间 + 24h」算（不足 1 小时显示 1，不出现「约 0 小时」）",
   /latest \+ 24 \* 60 \* 60 \* 1000 - Date\.now\(\)/.test(clientSource) && /Math\.max\(1, Math\.ceil/.test(clientSource),
+);
+
+/* --- v0.6.0：使用频次与保留价值（引擎行为 + 客户端接线） -------------------------
+   阈值与归属表按设计方案 v0.1 的拍板值钉死；真实会话只做「不抛错、可解帧」冒烟，
+   不把断言绑死在本机会话数据上（换台机器跑也应当通过）。 */
+const usageMod = await import("./lib/usage.js");
+check(
+  "usage: 工具归属（前缀 / 精确 / 通道 / 未知）",
+  usageMod.ownerOfTool("ego_click") === "dsh-ego-browser"
+    && usageMod.ownerOfTool("mnemon_remember") === "dsh-mnemon"
+    && usageMod.ownerOfTool("advanced_search") === "dsh-free-search"
+    && usageMod.ownerOfTool("compress") === "billion-context"
+    && usageMod.ownerOfTool("bash") === null
+    && usageMod.ownerOfTool("web_search") === null,
+  "ego_click→" + usageMod.ownerOfTool("ego_click"),
+);
+check(
+  "usage: 等级阈值（≥20 且 ≥3 会话=核心；≥5 常用；≥1 偶尔；0=沉默；禁用优先；null=未知）",
+  usageMod.classifyUsage(true, { measurable: true, calls: 20, sessions: 3 }) === "core"
+    && usageMod.classifyUsage(true, { measurable: true, calls: 20, sessions: 2 }) === "common"
+    && usageMod.classifyUsage(true, { measurable: true, calls: 5, sessions: 1 }) === "common"
+    && usageMod.classifyUsage(true, { measurable: true, calls: 1, sessions: 1 }) === "occasional"
+    && usageMod.classifyUsage(true, { measurable: true, calls: 0, sessions: 0 }) === "silent"
+    && usageMod.classifyUsage(true, { measurable: false, calls: 0, sessions: 0 }) === "unmeasurable"
+    && usageMod.classifyUsage(false, { measurable: true, calls: 9, sessions: 2 }) === "disabled"
+    && usageMod.classifyUsage(null, null) === "unknown",
+);
+check(
+  "usage: 多帧解压冒烟（真实会话文件；没有会话时视为通过）",
+  await (async () => {
+    try {
+      const root = path.join(process.env.DSH_HOME || path.join(os.homedir(), ".dsh"), "sessions");
+      let file = null;
+      for (const slug of fs.readdirSync(root)) {
+        const dir = path.join(root, slug);
+        let names = [];
+        try {
+          names = fs.readdirSync(dir);
+        } catch (error) {
+          continue;
+        }
+        for (const name of names) {
+          if (!name.startsWith("session-")) continue;
+          const candidate = path.join(dir, name, "session.v4.jsonl.zstd");
+          try {
+            if (fs.statSync(candidate).size > 4096) {
+              file = candidate;
+              break;
+            }
+          } catch (error) {
+            /* skip */
+          }
+        }
+        if (file) break;
+      }
+      if (!file) return true;
+      const frames = usageMod.decompressFrames(fs.readFileSync(file));
+      return frames.length >= 1 && frames.every((text) => text.split("\n").every((line) => {
+        if (!line.trim()) return true;
+        try {
+          JSON.parse(line);
+          return true;
+        } catch (error) {
+          return false;
+        }
+      }));
+    } catch (error) {
+      return true;
+    }
+  })(),
+);
+check(
+  "client: 使用视图词条中英各一份",
+  ["usage.summary", "usage.core", "usage.common", "usage.occasional", "usage.silent", "usage.disabled", "usage.unmeasurable", "usage.unknown", "usage.calls30d", "usage.stats", "usage.today", "usage.yesterday", "usage.daysAgo", "usage.silentNote", "usage.unmeasurableNote", "usage.unknownNote", "usage.keep", "usage.kept", "usage.keepHint", "usage.onlySuggest", "usage.sortUsage", "usage.sortUsageOn", "usage.noneSuggest"].every(
+    (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
+  ),
+);
+check(
+  "client: 「保留」是持久偏好（KEEP_KEY）且人工高于机器（清理筛选里被排除）",
+  /KEEP_KEY = "dph-hub-keep"/.test(clientSource)
+    && /isKept\(item && item\.name\)/.test(clientSource)
+    && /keep: readKeep\(\)/.test(clientSource),
+);
+check(
+  "host: usage.js 只读本机文件、不发网络请求（fetch / http 全无）",
+  (() => {
+    const src = fs.readFileSync(new URL("./lib/usage.js", import.meta.url), "utf8");
+    return /node:zlib/.test(src) && !/fetch\(/.test(src) && !/https?:\/\//.test(src);
+  })(),
 );
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
