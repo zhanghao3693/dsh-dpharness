@@ -542,6 +542,11 @@ check("meta: 列出十条路由", metaRoutes.out.body.routes.length === 10, JSON
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
+check(
+  "meta: 带 bootId（每次启动一个新值 —— 时间戳会被时钟与「又装一个」干扰，bootId 不会）",
+  typeof metaRoutes.out.body.bootId === "string" && metaRoutes.out.body.bootId.length >= 8,
+  String(metaRoutes.out.body.bootId),
+);
 check("自动化测试未触发真实安装", sent.length === outboundBeforeInstall && installGet.out.body.job.active === false, "install 段新增外部请求=" + (sent.length - outboundBeforeInstall));
 
 /* --- v0.4.2：安装漏斗与「安装成功之后」的埋点 ---
@@ -643,7 +648,9 @@ check(
 );
 check(
   "mergeChangelog: 远端独有版本补进来",
-  changelogMod.mergeChangelog(changelogMod.CHANGELOG, [{ tag_name: "v0.6.0", published_at: "2026-11-01T00:00:00Z", body: "- 新东西", draft: false }])[0].version === "0.6.0",
+  /* 用 9.9.9 而不是当前版本的下一个 —— 写死版本号的话，每次发版都会把它变成假失败
+     （2026-10-14 与 2026-10-17 各踩过一次）。 */
+  changelogMod.mergeChangelog(changelogMod.CHANGELOG, [{ tag_name: "v9.9.9", published_at: "2026-11-01T00:00:00Z", body: "- 新东西", draft: false }])[0].version === "9.9.9",
 );
 
 /* 路由场景一：两个上游都不可用 → 明确降级为内置，且「查不到」落到 null */
@@ -1499,19 +1506,40 @@ check("client: 自插件也算进批量（用户在意的是「一共几个」�
    ② 跨视图/跨会话持久；③ 重启发生后改口说「已生效」，不继续催。 */
 check(
   "client: 只有本地通道且真改了 profile 才记「待重启」（市场通道热挂载不记；same/none 版本没动也不记）",
-  /if \(!done\.market && done\.changed\) markRestartPending\(/.test(clientSource),
+  /if \(!done\.market && done\.changed\) \{/.test(clientSource) && /markRestartPending\(item\.nameZh \|\| item\.name \|\| target\)/.test(clientSource),
 );
 check(
   "client: 待重启落 localStorage 且合并去重（连装几个只出一条，名字不重复）",
   /RESTART_KEY = "dph-hub-restart-pending"/.test(clientSource) && /Array\.from\(new Set\(current\.names\.concat/.test(clientSource),
 );
 check(
-  "client: 横幅挂载问宿主 startedAt —— 重启已发生就改口「已生效」；取不到按未重启处理（宁可多提醒）",
-  /setEffective\(typeof body\.startedAt === "number" && body\.startedAt > pending\.at\)/.test(clientSource),
+  "client: 判定必须取 getJson 的 .data —— 曾直接读 body.startedAt（包装对象上没有这个字段），「已生效」分支从未生效过",
+  /const body = result && result\.data;/.test(clientSource) && !/typeof body\.startedAt === "number" && body\.startedAt > pending\.at\)\s*;?\s*\n\s*\}\)\s*\.catch/.test(clientSource),
 );
 check(
-  "client: 新的待重启先重置「已生效」（否则装完第二个插件会沿用上一次的已生效状态）",
-  /setEffective\(false\);\s*\n\s*getJson\("\/api\/dpharness\/meta"\)/.test(clientSource),
+  "client: 横幅比对 bootId（重启必变）+ startedAt 兜底（老宿主没有 bootId）",
+  /const restarted = pending\.boot && typeof body\.bootId === "string" && body\.bootId/.test(clientSource) && /body\.startedAt > pending\.at/.test(clientSource),
+);
+check(
+  "client: 待重启记录钉住宿主 bootId（时间戳作兜底，旧记录缺 boot 时回退）",
+  /boot: hostBootId \|\| ""/.test(clientSource) && /boot: typeof parsed\.boot === "string" \? parsed\.boot : ""/.test(clientSource),
+);
+check(
+  "client: 新的待重启先重置「已生效」与「查不到」两个状态（否则装完第二个插件会沿用上一次结论）",
+  /setEffective\(false\);\s*\n\s*setUnknown\(false\);/.test(clientSource),
+);
+check(
+  "client: 未生效时退避复查（最多 10 次），一旦生效立即停止 —— 页面不重新挂载也能改口",
+  /const RETRY_MS = \[0, 8000, 20000, 40000\];/.test(clientSource) && /const MAX_ASKS = 10;/.test(clientSource) && /if \(restarted\) \{\s*\n\s*setEffective\(true\);\s*\n\s*return;/.test(clientSource),
+);
+check(
+  "client: 连续查不到状态改口「查不到重启状态」，不让人误以为自己没重启成功",
+  /if \(misses >= 3\) setUnknown\(true\);/.test(clientSource) && /t\("install\.unknownState"\)/.test(clientSource),
+);
+const hostSrcBoot = fs.readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
+check(
+  "host: meta 暴露 bootId（每次进程启动一个新值，重启的硬证据）",
+  /const BOOT_ID = randomUUID\(\);/.test(hostSrcBoot) && /bootId: BOOT_ID,/.test(hostSrcBoot),
 );
 check(
   "client: 横幅的重启按钮同样两步确认，并单独埋点（重启会掐断当前会话）",
