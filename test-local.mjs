@@ -955,9 +955,14 @@ const client = spec.factory((id) => {
 check("client: 导出 apply/inject/NS", typeof client.apply === "function" && client.NS === "dpharness");
 
 const registered = {};
+/* 字典留一份：界面文案是**用户可见面**，得能断言到文案本身，不能只断言 key 存在 */
+const clientDicts = {};
 const clientCtx = {
   effect: (fn) => fn(),
-  locale: { register: () => ({ dispose() {} }), bind: () => (key) => key },
+  locale: {
+    register: (ns, dict) => { clientDicts[ns] = dict; return { dispose() {} }; },
+    bind: () => (key) => key,
+  },
   slots: {
     inject: (name, fn) => fn(),
     register: (options, view) => { registered[options.name] = { options, view }; return { dispose() {} }; },
@@ -976,6 +981,27 @@ check("client: 含左下入口", !!registered["sidebar.footer.action"]);
 check("client: 含全站浮窗", !!registered["shell.overlay"]);
 check("client: 含「设置 → 通用」的一行（浮窗开关）", !!registered["settings.general.item"]);
 check("client: 含「设置 → 插件」的页签（完整设置页）", !!registered["settings.plugins.tab"]);
+
+/* --- 2026-10-19 用户实测截图：卡片标签露出站点英文枚举（core / verify: pass / risk: unknown） ---
+   标签是中文界面里第一眼看到的东西，英文枚举对用户零信息量 ⇒ 一律经字典翻译。 */
+const clientSrcTags = fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8");
+const tagKeys = [...new Set([...clientSrcTags.matchAll(/"(tag\.[a-z.]+)"/g)].map((m) => m[1]))];
+check(
+  "client: 卡片标签走字典，不再现拼英文枚举",
+  /const TAG_LABEL = \{/.test(clientSrcTags)
+    && !/badge\("verify: pass"/.test(clientSrcTags)
+    && !/"risk: " \+ item\.risk/.test(clientSrcTags),
+);
+check(
+  "client: 每个标签 key 中英两份文案齐全",
+  tagKeys.length >= 7 && tagKeys.every((k) => clientDicts.dpharness.zh[k] && clientDicts.dpharness.en[k]),
+  tagKeys.join(","),
+);
+check(
+  "client: 中文标签是中文（不许整条 ASCII）",
+  tagKeys.every((k) => /[\u4e00-\u9fff]/.test(clientDicts.dpharness.zh[k])),
+  tagKeys.map((k) => clientDicts.dpharness.zh[k]).join(" / "),
+);
 
 /* --- v0.4.2：加载心跳 + 安装后回执（跑的是真实代码路径，不是源码匹配） --- */
 const firstEvents = hubEvents();
