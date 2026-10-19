@@ -1038,7 +1038,13 @@ const react = req("react");
 const { renderToStaticMarkup } = req("react-dom/server");
 
 const tabHtml = renderToStaticMarkup(react.createElement(registered["conversation.view"].view, {}));
-check("tab: SSR 渲染", tabHtml.includes("dph_root"), tabHtml.slice(0, 80));
+check("tab: SSR 渲染", tabHtml.includes("dph_work"), tabHtml.slice(0, 80));
+/* 2026-10-19 A2：页签从单列纵向流改成「页头 + 页签 / 主列 / 侧栏」双栏工作台。
+   判据取三个容器，缺一个就说明布局没生效（只查 dph_work 会被"换了个壳"骗过）。 */
+check(
+  "tab: 双栏工作台结构（页头 + 主列 + 侧栏）",
+  tabHtml.includes("dph_workHead") && tabHtml.includes("dph_mainCol") && tabHtml.includes("dph_rail"),
+);
 /* v0.4.4：会话端页签加入「分类精选」—— 判据是**两个视图的文案 key 都出现**，
    而不是只看有没有 dph_seg（排序/数量控件也在用同一套 class）。 */
 check(
@@ -1046,7 +1052,9 @@ check(
   tabHtml.includes("best.recommend") && tabHtml.includes("best.picks"),
   `recommend=${tabHtml.includes("best.recommend")} picks=${tabHtml.includes("best.picks")}`,
 );
-check("tab: 视图切换默认停在「严选推荐」", /dph_segBtnOn[^>]*>best\.recommend</.test(tabHtml), (tabHtml.match(/<button class="dph_segBtn[^>]*>[^<]*</g) || []).slice(0, 3).join(" | "));
+/* 视图切换从分段按钮（dph_segBtnOn）改成下划线页签（dph_tabOn）——
+   判据仍是"默认停在严选推荐"，只是承载它的元素换了。 */
+check("tab: 视图切换默认停在「严选推荐」", /dph_tabOn[^>]*>best\.recommend</.test(tabHtml), (tabHtml.match(/<button class="dph_tab[^>]*>[^<]*</g) || []).slice(0, 3).join(" | "));
 check("tab: 底部有「显示右下角浮窗」开关（浮窗被隐藏后的第二个恢复入口）", tabHtml.includes("action.showFloat"));
 /* 页签必须订阅共享 store：否则在胶囊/面板里关闭浮窗后，这里的勾选态不跟着变。
    （clientSource 在下面才定义，这里单独读一次源码。） */
@@ -1369,6 +1377,45 @@ check(
 const weekKeys = ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"].map((d) => (client.pickDaily(fixedBest, d) || {}).key);
 check("pickDaily: 跨天会换（否则「每日」是假的）", new Set(weekKeys).size > 1, weekKeys.join(" > "));
 check("pickDaily: 空数据/空分组 → null（不抛错）", client.pickDaily(null, "2026-10-12") === null && client.pickDaily({ categories: [] }, "2026-10-12") === null);
+
+/* 侧栏「各小类冠军」的口径 A（2026-10-19 定案）：
+   各小类 rank=1 → 周下载降序 → 星数 → fullName。四条边界都要钉住：
+   ① rank≥2 的就算下载最高也不进（接口前三条的老问题正是这一条）；
+   ② 空/缺失的周下载沉底，不能当 0 又压过真值；
+   ③ 同一插件在两个小类都以 rank=1 出现时只留一条；
+   ④ 空数据 → 空数组（调用方据此整块不渲染）。 */
+const hlPool = {
+  month: "2026-10",
+  categories: [
+    { key: "a", label: "浏览器", subs: [{ key: "s1", label: "侧边栏", items: [
+      { fullName: "o/low", name: "low", rank: 1, weeklyDownloads: 100 },
+      { fullName: "o/dup", name: "dup", rank: 1, weeklyDownloads: 9000 },
+      { fullName: "o/runner", name: "runner", rank: 2, weeklyDownloads: 99999 },
+    ] }] },
+    { key: "b", label: "工具", subs: [{ key: "s2", label: "统计", items: [
+      { fullName: "o/high", name: "high", rank: 1, weeklyDownloads: 5000, stars: 60 },
+      { fullName: "o/none", name: "none", rank: 1, weeklyDownloads: null, stars: 999999 },
+    ] }] },
+    { key: "c", label: "其他", subs: [{ key: "s3", label: "杂项", items: [
+      { fullName: "o/mid", name: "mid", rank: 1, weeklyDownloads: 5000, stars: 50 },
+      { fullName: "o/dup", name: "dup", rank: 1, weeklyDownloads: 9000 },
+    ] }] },
+  ],
+};
+const hlTop = client.pickHighlights(hlPool, 3);
+const hlAll = client.pickHighlights(hlPool, 5);
+check(
+  "pickHighlights: 只取各小类第 1 名（小类第 2 名下载再高也不进）",
+  hlAll.every((e) => Number(e.item.rank) === 1) && !hlAll.some((e) => e.key === "o/runner"),
+  hlAll.map((e) => e.key).join(" > "),
+);
+check("pickHighlights: 周下载降序，并列时按星数", hlTop.map((e) => e.key).join(",") === "o/dup,o/high,o/mid", hlTop.map((e) => e.key + ":" + e.item.weeklyDownloads).join(" | "));
+check("pickHighlights: 同一插件在两个小类都是第一名时只留一条", hlAll.filter((e) => e.key === "o/dup").length === 1);
+check("pickHighlights: 周下载缺失的沉底（不当 0 处理）", hlAll[hlAll.length - 1].key === "o/none", hlAll.map((e) => e.key).join(" > "));
+check(
+  "pickHighlights: 空数据 / 没有 rank=1 → 空数组（侧栏据此整块不渲染）",
+  client.pickHighlights(null, 3).length === 0 && client.pickHighlights({ categories: [{ key: "x", subs: [{ key: "y", items: [{ fullName: "o/z", rank: 2 }] }] }] }, 3).length === 0,
+);
 check(
   "flattenBest: 跳过缺唯一键的脏条目",
   client.flattenBest({ categories: [{ label: "x", subs: [{ label: "y", items: [{ name: "no-key" }, { fullName: "o/ok" }] }] }] }).length === 1,
