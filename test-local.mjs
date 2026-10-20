@@ -1127,6 +1127,20 @@ check(
   "client: 套装内必要性说人话（必备/增强/可选），不把 required 直接摊给用户",
   clientSource.includes('t("need." + (item.need || "enhance"))') && clientSource.includes('"need.required": "必备"'),
 );
+/* 2026-10-20：槽位行曾与设置页共用 `.dph_setRow`，后定义者覆盖前者 —— 四段被
+   `justify-content:space-between` 摊到行两端，名字与徽标随星数宽度漂移（用户截图暴露）。
+   这里钉两件事：① 同名类只允许定义一次；② 槽位行用独立类名 + 网格，不再单行 flex。 */
+check(
+  "client: 样式不重复定义同名类（.dph_setRow 曾被设置页覆盖套装槽位行）",
+  (clientSource.match(/\.dph_setRow\{/g) || []).length === 1,
+  String((clientSource.match(/\.dph_setRow\{/g) || []).length) + " 处定义",
+);
+check(
+  "client: 套装槽位行用独立类名 + 网格多列（宽屏吃满宽度，role 缺失也占位对齐）",
+  clientSource.includes('className: "dph_slotGrid"') &&
+    /\.dph_slotRow\{display:grid;grid-template-columns:minmax\(0,1fr\) auto auto/.test(clientSource) &&
+    /\.dph_slotRole\{grid-column:1\/-1;min-height:16px/.test(clientSource),
+);
 
 /* --- v0.5.0 「我的插件中心」：卸载 + 忽略此版本 --- */
 check(
