@@ -271,7 +271,7 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册十条路由", Object.keys(routes).length === 10, Object.keys(routes).join(", "));
+check("host: 注册十一条路由", Object.keys(routes).length === 11, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -431,6 +431,16 @@ const badVid = await relay({ event: "plugin_hub", visitorId: "short", detail: { 
 body = badVid.forwarded && JSON.parse(badVid.forwarded.options.body);
 check("relay: 非法 visitorId → null", body && body.visitorId === null, JSON.stringify(body && body.visitorId));
 
+/* 社群入口埋点（2026-10-20）：action + scope 落成 "<action>:via=<scope>:v=<ver>"，
+   与既有的 open/site_click 同一口径 —— 不另起一套 key，否则看板要按两套规则聚合。 */
+const joinEvt = await relay({ event: "plugin_hub", visitorId: vid, detail: { action: "community_join", scope: "qq" } });
+body = joinEvt.forwarded && JSON.parse(joinEvt.forwarded.options.body);
+check(
+  "relay: 社群入口埋点带 via（scope 统一成 via）",
+  !!body && body.value === "community_join:via=qq:v=" + host.VERSION,
+  body && body.value,
+);
+
 /* --- install route：只测拒绝路径与状态形状，自动化测试绝不真装 --- */
 /* --- 分类精选（站点 /best 的同源数据） ---
    放在 install 段之前：那条「自动化测试未触发真实安装」的不变式会在 install 段开始时
@@ -538,7 +548,7 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出十条路由", metaRoutes.out.body.routes.length === 10, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出十一条路由", metaRoutes.out.body.routes.length === 11, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
@@ -1056,6 +1066,19 @@ check(
    判据仍是"默认停在严选推荐"，只是承载它的元素换了。 */
 check("tab: 视图切换默认停在「严选推荐」", /dph_tabOn[^>]*>best\.recommend</.test(tabHtml), (tabHtml.match(/<button class="dph_tab[^>]*>[^<]*</g) || []).slice(0, 3).join(" | "));
 check("tab: 底部有「显示右下角浮窗」开关（浮窗被隐藏后的第二个恢复入口）", tabHtml.includes("action.showFloat"));
+/* 2026-10-20：社群 + 订阅入口常驻页签首屏（挂在待重启横幅同一层，不随列表滚走）；
+   qrImg 必须**不在** SSR 里 —— 二维码默认收起，点开才渲染。 */
+check(
+  "tab: 首屏含社群 + 订阅入口，且二维码默认不展开",
+  tabHtml.includes("dph_join") && tabHtml.includes("join.title") && tabHtml.includes("join.showQr") && !tabHtml.includes("dph_qrImg"),
+  `join=${tabHtml.includes("dph_join")} qrRendered=${tabHtml.includes("dph_qrImg")}`,
+);
+check(
+  "overlay: 面板底部挂社群与订阅入口（compact 版）",
+  /className: "dph_panelFoot"[\s\S]{0,260}?JoinCard[\s\S]{0,40}?compact: true/.test(
+    fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8"),
+  ),
+);
 /* 页签必须订阅共享 store：否则在胶囊/面板里关闭浮窗后，这里的勾选态不跟着变。
    （clientSource 在下面才定义，这里单独读一次源码。） */
 const srcForTab = fs.readFileSync(new URL("./lib/client.js", import.meta.url), "utf8");
@@ -1443,6 +1466,12 @@ check(
   setPanelHtml.slice(0, 110),
 );
 check("settings: 插件页签带「恢复默认」", setPanelHtml.includes("settings.reset") && setPanelHtml.includes("settings.about"));
+/* 2026-10-20：社群 + 订阅入口在设置页也有一份（inSet 版：无外框、只留分隔线） */
+check(
+  "settings: 插件页签含社群与订阅入口（inSet 版）",
+  setPanelHtml.includes("dph_joinInSet") && setPanelHtml.includes("join.title") && setPanelHtml.includes("join.newsletter"),
+  setPanelHtml.slice(0, 110),
+);
 check(
   "settings: 两处开关同源（都订阅共享 store，改一处另一处立刻同步）",
   /function SettingsFloatRow\(\)\s*\{[\s\S]{0,300}?useHub\(\)/.test(clientSource) && /function SettingsPanel\(\)\s*\{[\s\S]{0,200}?useHub\(\)/.test(clientSource),
@@ -2032,6 +2061,75 @@ check(
   );
   delete ctx.get;
 }
+
+/* --- 订阅转发（2026-10-20）---
+   站点 /api/subscribe 不带 CORS 头，浏览器跨源直发不成立（与埋点同一实测结论），
+   所以邮箱必须经本机 host 转发。这里断言转发目标、载荷形状与拒绝路径。
+   ⚠️ 放在文件末尾：install 段开始前会对 sent 取快照并断言「没有真实安装请求」，
+   任何更早产生的出站调用都会污染那条不变式。 */
+check("subscribe: 路由已注册（清单漏了等于宿主 404）", typeof routes["/api/dpharness/subscribe"] === "function");
+
+/* 这一段自带 stub：早先的全局 stub 在 924 行已被恢复成真实 fetch，
+   沿用它会**真的打网络**（本轮实测：断言失败前已经发出一次真实请求）。
+   所以这里装一个只在本段内有效的 stub，测完还原。 */
+const subscribeSent = [];
+const subscribeRealFetch = globalThis.fetch;
+globalThis.fetch = async (url, options) => {
+  subscribeSent.push({ url: String(url), options });
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, message: "已发送确认邮件，请查收（记得点开确认链接）" }),
+  };
+};
+
+async function subscribe(payload) {
+  const out = mockRes();
+  await routes["/api/dpharness/subscribe"](mockReq("POST", "/api/dpharness/subscribe", payload), out);
+  const forwarded = subscribeSent[subscribeSent.length - 1];
+  return { res: out, forwarded };
+}
+
+const subOk = await subscribe({ email: " Reader@Example.COM " });
+const subBody = subOk.forwarded && JSON.parse(subOk.forwarded.options.body);
+check(
+  "subscribe: 转发到站点 /api/subscribe",
+  !!(subOk.forwarded && subOk.forwarded.url === "https://dpharness.com/api/subscribe"),
+  subOk.forwarded && subOk.forwarded.url,
+);
+check("subscribe: 邮箱归一化（trim + 小写）", !!subBody && subBody.email === "reader@example.com", JSON.stringify(subBody && subBody.email));
+check(
+  "subscribe: 只带 email + source（不夹带 visitorId 等本机标识）",
+  !!subBody && Object.keys(subBody).sort().join(",") === "email,source" && subBody.source === "dsh-plugin",
+  JSON.stringify(subBody),
+);
+check(
+  "subscribe: 站点 message 原样透出（不在插件里另写一套文案）",
+  subOk.res.out.status === 200 && /确认/.test((subOk.res.out.body || {}).message || ""),
+  JSON.stringify(subOk.res.out.body),
+);
+
+const subCountBefore = subscribeSent.length;
+const subBad = await subscribe({ email: "not-an-email" });
+check("subscribe: 格式非法 → 400", subBad.res.out.status === 400, "status=" + subBad.res.out.status);
+check(
+  "subscribe: 格式非法时不发外部请求（本地就挡住）",
+  subscribeSent.length === subCountBefore,
+  `before=${subCountBefore} after=${subscribeSent.length}`,
+);
+
+const sub405 = mockRes();
+await routes["/api/dpharness/subscribe"]({ method: "GET", url: "/api/dpharness/subscribe" }, sub405);
+check("subscribe: 非 POST → 405", sub405.out.status === 405, "status=" + sub405.out.status);
+
+globalThis.fetch = subscribeRealFetch;
+
+check(
+  "client: 社群与订阅词条中英各一份（少一份就是半边界面漏文案）",
+  ["join.title", "join.showQr", "join.subscribe", "join.subscribeOk", "join.note"].every(
+    (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
+  ),
+);
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
 process.exit(failures === 0 ? 0 : 1);

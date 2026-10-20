@@ -88,6 +88,30 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 设置页里的三个开关与别处**共用同一个状态源**（都读共享 store 并走同一条写路径），
 所以不会出现「在通用里开了、到插件页签里还显示关」的错位。
 
+## 社群与订阅入口（v0.6.4）
+
+一条卡，三处出现，内容相同、版式不同：
+
+| 位置 | 版式 | 说明 |
+|---|---|---|
+| 页签「严选插件」 | 宽版（通栏） | 挂在「待重启」横幅同一层，**不随列表滚走** |
+| 全站浮窗 | compact | 面板底部；省掉说明行，二维码与表单各占一行 |
+| 设置 → 插件 → 严选插件 | 宽版 · 无外框 | 开关之后、更新日志之前，用一条分隔线接入 |
+
+**交流群**：QQ 群与飞书群两个入口，二维码**默认收起**，点「查看二维码」才展开
+（展开约 +120px，页签首屏会被列表挤走）。二维码不存图 —— 取站点 `GET /qr?url=…`
+按群链接现生成 PNG，换群链接后码自动跟着变。尺寸 **84px 是下限**（站点实测：64px
+时 jsQR 已解不出，72px 是临界），不要再改小。
+
+**邮件订阅**：插件内直接填邮箱即可，不必跳站。提交经本机 host 的
+`POST /api/dpharness/subscribe` 转发到站点 —— 站点 `/api/subscribe` 是 double opt-in
+（入库 pending → 发确认信 → 点链接才 confirmed），且**不带 CORS 头**，浏览器跨源直发
+不成立（与埋点代理同一条实测结论）。
+
+> 群链接的真源在站点 `lib/community.ts`（首页右栏 / 文章页 CTA / 全站页脚三处读它）。
+> 本插件是独立 npm 包，不能 import 站点代码，`lib/client.js` 里保留一份副本 ——
+> **换群或改链接要两处同时改**。
+
 ## 更新检查与红点（v0.5.0）
 
 「更新」视图一次回答两件事：**本插件自己**要不要升、**你装的其它 dsh 插件**里哪些有新版。
@@ -455,6 +479,7 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
 | `GET /api/dpharness/updates` | 本插件 + 已装插件的更新检查（逐包问 npmmirror，并补上中文名与说明），缓存 10 分钟；`?refresh=1` 绕过但 30 秒只放行一次 |
 | `GET /api/dpharness/postinstall?pkg=&via=&at=` | 安装后回执（只读：进程启动时间 + profile 加载清单） |
 | `POST /api/dpharness/event` | 埋点代理 → `dpharness.com/api/track/event` |
+| `POST /api/dpharness/subscribe` | `{ email }`，订阅代理 → `dpharness.com/api/subscribe`（站点点 CORS 头不可直发）；只转发邮箱 + `source=dsh-plugin`，不落盘、不写日志；60 秒 5 次预算 |
 | `POST /api/dpharness/install` | `{ pkg }`，spawn `dsh plugin add`；返回 202 + 任务启动 |
 | `GET /api/dpharness/install` | 安装任务进度与结果 |
 | `GET /api/dpharness/meta` | 版本、profile、路由清单、缓存与安装状态 |
@@ -478,6 +503,9 @@ dateKey = YYYY-MM-DD（**固定 UTC+8**，不是本地时区）
   与红点确认标记（清了会让刚关掉的红点立刻又亮）。
 - 更新检查**只读本地文件与只读 registry**：不上传你装了哪些包，也不代替你安装任何东西。
 - 埋点经本地 host 转发（站点端点不带 CORS 头），失败静默忽略，绝不影响操作。
+- **订阅邮箱只在你主动填并点「订阅」时才离开本机**：经 host 转发到
+  `dpharness.com/api/subscribe`，插件侧不存、不写日志、不附 visitorId；
+  站点的确认信里带退订入口，退订走站点自己的通道。不填就一个字节也不发。
 - 安装失败时展示的 pnpm 输出（卡片上的诊断行）**展示前统一脱敏**：
   `.npmrc` 形态的凭据（`_authToken` / `_auth` / `_password` / `token=`）、
   `Authorization: Bearer …` 以及裸 `npm_…` token 一律替换为 `***`。
