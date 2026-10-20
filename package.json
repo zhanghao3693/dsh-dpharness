@@ -58,6 +58,7 @@
   "files": ["icon.svg", "locale", "lib/index.js",
     "lib/changelog.js",
     "lib/client.js",
+    "lib/usage.js",
     "README.md",
     "cordis.patch.yml"],
   "keywords": [
