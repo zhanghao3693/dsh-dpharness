@@ -130,7 +130,10 @@ else {
   const out = (res.stdout || "") + (res.stderr || "");
   const fails = out.split("\n").filter((l) => l.startsWith("FAIL"));
   if (res.status !== 0 || fails.length) {
-    die("自测未通过，不发版：\n" + fails.slice(0, 10).join("\n"));
+    /* 没有 FAIL 行却非 0（例如缺 .dev/node_modules 里的 react）—— 直接吐输出尾部，
+       否则只剩一句「自测未通过」，排查得从头再来。 */
+    const detail = fails.length ? fails.slice(0, 10).join("\n") : out.trim().split("\n").slice(-15).join("\n");
+    die("自测未通过，不发版：\n" + (detail || "（无输出）"));
   }
   const pass = out.split("\n").filter((l) => l.startsWith("PASS")).length;
   say(`自测通过（${pass} 项）。`);
