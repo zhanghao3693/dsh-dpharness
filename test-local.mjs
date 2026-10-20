@@ -2126,9 +2126,21 @@ globalThis.fetch = subscribeRealFetch;
 
 check(
   "client: 社群与订阅词条中英各一份（少一份就是半边界面漏文案）",
-  ["join.title", "join.showQr", "join.subscribe", "join.subscribeOk", "join.note"].every(
+  ["join.title", "join.showQr", "join.subscribe", "join.subscribeOk", "join.note", "join.failRoute", "join.failNetwork"].every(
     (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
   ),
+);
+/* 失败文案必须按「错在哪一段」分开（2026-10-20 实测）：宿主未重启时路由不存在，
+   请求拿不到 2xx，旧版压成一句「请稍后再试」，用户对着已订阅的邮箱排不出线索。 */
+check(
+  "client: 订阅失败按状态码分流（404/非 JSON → 路由未加载；5xx → 上游；网络 → 本机服务）",
+  /response\.status === 404 \|\| !jsonType/.test(clientSource) &&
+    clientSource.includes('"join.failUpstream"') &&
+    clientSource.includes('"join.failNetwork"'),
+);
+check(
+  "client: 订阅成功判定要求 JSON（SPA 兜底回的 HTML 200 不能被当成成功）",
+  /content-type/.test(clientSource) && /!jsonType/.test(clientSource),
 );
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
