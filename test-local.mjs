@@ -54,6 +54,98 @@ globalThis.fetch = async (url, options) => {
     if (!npmVersions.has(name)) return { ok: false, status: 404, json: async () => ({}) };
     return { ok: true, status: 200, json: async () => ({ version: npmVersions.get(name) }) };
   }
+  // 「周榜」上游（站点 GET /api/board/{top,installs}）：两条**形状故意不同** ——
+  // top 给嵌套 installCheck，installs 给扁平 installStatus + pkgName。
+  // 归一化是 host 的职责，测试要能证明它真的做了（否则装机榜会拼不出命令）。
+  if (String(url).includes("/api/board/top")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        kind: "top",
+        period: "2026-W43",
+        periodNo: "4",
+        weekStart: "2026-10-19",
+        capturedAt: "2026-10-20T02:30:00.000Z",
+        dataFrom: "2026-10-12",
+        dataTo: "2026-10-12",
+        isLive: false,
+        total: 2,
+        eligibleCount: 812,
+        totalPlugins: 19000,
+        items: [
+          {
+            rank: 1,
+            fullName: "dsh-market/dsh-market",
+            name: "dsh-market",
+            nameZh: "插件市场",
+            tagline: "在 DSH 里直接逛插件市场",
+            weeklyDownloads: 2520000,
+            stars: 7460,
+            pkgName: "dshmarket",
+            tier: "core",
+            category: "platform",
+            pluginType: "deepseek-harness",
+            verifyStatus: "pass",
+            installCheck: { status: "pass", pkgName: "dshmarket" },
+          },
+          {
+            rank: 2,
+            fullName: "sandbox/source-only",
+            name: "source-only",
+            nameZh: null,
+            tagline: null,
+            weeklyDownloads: 1200,
+            stars: 12,
+            pkgName: null,
+            tier: "related",
+            category: null,
+            pluginType: "deepseek-harness",
+            verifyStatus: null,
+            installCheck: null,
+          },
+        ],
+      }),
+    };
+  }
+  if (String(url).includes("/api/board/installs")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        kind: "installs",
+        windowDays: 7,
+        windowStart: "2026-10-13T16:00:00.000Z",
+        prevWindowStart: "2026-10-06T16:00:00.000Z",
+        totalUv: 460,
+        totalPrevUv: 191,
+        mappedUv: 402,
+        take: 30,
+        total: 1,
+        items: [
+          {
+            fullName: "ranxianglei/billion-context",
+            nameZh: "亿级上下文压缩",
+            name: "billion-context",
+            tagline: null,
+            descriptionZh: "把长对话压进上下文窗口",
+            pkgName: "billion-context-dsh",
+            href: "/plugin/ranxianglei/billion-context",
+            thisUv: 79,
+            prevUv: 64,
+            delta: 15,
+            sharePct: 17.2,
+            installStatus: "pass",
+            translated: true,
+            category: "ui",
+            tier: "core",
+          },
+        ],
+      }),
+    };
+  }
   // 「套装」上游（站点 GET /api/sets）：结构与真实接口一致（方案 → 槽位条目）
   if (String(url).includes("/api/sets")) {
     return {
@@ -271,7 +363,10 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-check("host: 注册十一条路由", Object.keys(routes).length === 11, Object.keys(routes).join(", "));
+/* 2026-10-20：周榜新增 /api/dpharness/board（第十二条）。这条断言写死条数是有意的
+   ——「宿主少注册一条路由」的典型症状是运行时 404，而 404 在界面上只表现为
+   "取数失败"，不加这个闸就只能靠用户撞。新增路由时必须同步改这里。 */
+check("host: 注册十二条路由", Object.keys(routes).length === 12, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -523,6 +618,95 @@ check(
 const sets405 = mockRes();
 await routes["/api/dpharness/sets"]({ method: "POST", url: "/api/dpharness/sets" }, sets405);
 check("sets: 非 GET → 405", sets405.out.status === 405, "status=" + sets405.out.status);
+
+/* --- 2026-10-20 周榜（站点 /api/board/{top,installs} 同源）---
+   两条上游形状不同（top 嵌套 installCheck / installs 扁平 installStatus），
+   归一化必须在 host 完成，否则装机榜拼不出 npm 命令。 */
+const boardNoKind = mockRes();
+await routes["/api/dpharness/board"]({ method: "GET", url: "/api/dpharness/board" }, boardNoKind);
+check(
+  "board: 缺 kind → 400（不给默认值，否则「点了装机榜却看到下载量」无从排查）",
+  boardNoKind.out.status === 400 && Array.isArray(boardNoKind.out.body.allowed),
+  `status=${boardNoKind.out.status}`,
+);
+
+const boardBadKind = mockRes();
+await routes["/api/dpharness/board"]({ method: "GET", url: "/api/dpharness/board?kind=rising" }, boardBadKind);
+check(
+  "board: 非法 kind → 400 并列出允许值",
+  boardBadKind.out.status === 400 && boardBadKind.out.body.allowed.includes("installs"),
+  JSON.stringify(boardBadKind.out.body.allowed),
+);
+
+/* 上游 404 = 站点接口还没发版。必须 502 + 可照做的 hint，不能退化成"空榜单"
+   （空榜单会让用户以为"本周真的没人装"，是更坏的一种撒谎）。 */
+const boardFetchReal = globalThis.fetch;
+globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({}) });
+const boardDown = mockRes();
+await routes["/api/dpharness/board"]({ method: "GET", url: "/api/dpharness/board?kind=top" }, boardDown);
+globalThis.fetch = boardFetchReal;
+check(
+  "board: 站点未发版（404）→ 502 + hint，不退化成空榜",
+  boardDown.out.status === 502 && /404/.test(String(boardDown.out.body.error)) && !!boardDown.out.body.hint,
+  `status=${boardDown.out.status}`,
+);
+
+const boardTop = mockRes();
+const sentBeforeBoard = sent.length;
+await routes["/api/dpharness/board"]({ method: "GET", url: "/api/dpharness/board?kind=top" }, boardTop);
+const topBody = boardTop.out.body;
+check(
+  "board: top 200 + 期次元信息（期号缺失时界面改为实时口径）",
+  boardTop.out.status === 200 && topBody.kind === "top" && topBody.periodNo === "4" && topBody.live === false,
+  `status=${boardTop.out.status} period=${topBody.period}`,
+);
+check(
+  "board: top 条目走 slim()（命令用本机 profile，不抄站点字符串）",
+  topBody.items[0].cmd === "dsh plugin --profile web add dshmarket" && topBody.items[0].pkg === "dshmarket",
+  topBody.items[0].cmd,
+);
+check(
+  "board: top 名次与周下载量原样带出（卡片抬头用）",
+  topBody.items[0].rank === 1 && topBody.items[0].weekly === 2520000,
+  JSON.stringify({ rank: topBody.items[0].rank, weekly: topBody.items[0].weekly }),
+);
+check(
+  "board: 没有 installCheck 的条目退化为源码安装（不臆造包名）",
+  topBody.items[1].src === "repo" && topBody.items[1].cmd === "dsh plugin --profile web add sandbox/source-only",
+  topBody.items[1].cmd,
+);
+
+const boardTopCached = mockRes();
+await routes["/api/dpharness/board"]({ method: "GET", url: "/api/dpharness/board?kind=top" }, boardTopCached);
+check(
+  "board: 5 分钟内不重复打上游（cached=true 且没有新增请求）",
+  boardTopCached.out.body.cached === true && sent.length === sentBeforeBoard + 1,
+  `cached=${boardTopCached.out.body.cached} sent=${sent.length - sentBeforeBoard}`,
+);
+
+const boardInstalls = mockRes();
+await routes["/api/dpharness/board"]({ method: "GET", url: "/api/dpharness/board?kind=installs" }, boardInstalls);
+const insBody = boardInstalls.out.body;
+const insItem = (insBody.items || [])[0];
+check(
+  "board: installs 的扁平 installStatus 被归一成 installCheck（否则拼不出 npm 命令）",
+  !!insItem && insItem.cmd === "dsh plugin --profile web add billion-context-dsh" && insItem.pkg === "billion-context-dsh",
+  insItem && insItem.cmd,
+);
+check(
+  "board: installs 带本周 / 上周 / 增减（卡片抬头口径）",
+  !!insItem && insItem.thisUv === 79 && insItem.prevUv === 64 && insItem.delta === 15,
+  insItem && JSON.stringify({ thisUv: insItem.thisUv, prevUv: insItem.prevUv, delta: insItem.delta }),
+);
+check(
+  "board: installs 不透传 sharePct（榜进插件会自我强化，份额不摊到用户面前）",
+  !!insItem && insItem.sharePct === undefined,
+  insItem && String(insItem.sharePct),
+);
+
+const board405 = mockRes();
+await routes["/api/dpharness/board"]({ method: "POST", url: "/api/dpharness/board?kind=top" }, board405);
+check("board: 非 GET → 405", board405.out.status === 405, "status=" + board405.out.status);
 
 const outboundBeforeInstall = sent.length;
 
@@ -1062,6 +1246,9 @@ check(
   tabHtml.includes("best.recommend") && tabHtml.includes("best.picks"),
   `recommend=${tabHtml.includes("best.recommend")} picks=${tabHtml.includes("best.picks")}`,
 );
+/* 2026-10-20：页签新增「周榜」（第 6 个）。SSR 默认停在严选推荐，
+   这里只能证明**入口在**；视图本体由上面的 useBoard/renderBoard 断言兜住。 */
+check("tab: 页签含「周榜」入口（第 6 个视图）", tabHtml.includes("board.tab"), tabHtml.includes("board.tab") ? "ok" : "缺 board.tab");
 /* 视图切换从分段按钮（dph_segBtnOn）改成下划线页签（dph_tabOn）——
    判据仍是"默认停在严选推荐"，只是承载它的元素换了。 */
 check("tab: 视图切换默认停在「严选推荐」", /dph_tabOn[^>]*>best\.recommend</.test(tabHtml), (tabHtml.match(/<button class="dph_tab[^>]*>[^<]*</g) || []).slice(0, 3).join(" | "));
@@ -1140,6 +1327,46 @@ check(
   clientSource.includes('className: "dph_slotGrid"') &&
     /\.dph_slotRow\{display:grid;grid-template-columns:minmax\(0,1fr\) auto auto/.test(clientSource) &&
     /\.dph_slotRole\{grid-column:1\/-1;min-height:16px/.test(clientSource),
+);
+
+/* --- 2026-10-20 周榜视图（浮窗 + 页签两处）---
+   钉的是「接线与口径」：视图必须在两处都注册、只在该视图取数、
+   卡片复用同一份实现、以及中英两份文案齐全。 */
+check(
+  "client: 周榜在两处都注册（浮窗 + 页签），标签同源",
+  (clientSource.match(/\{ value: "board", label: t\("board\.tab"\) \}/g) || []).length === 2,
+  String((clientSource.match(/\{ value: "board", label: t\("board\.tab"\) \}/g) || []).length) + " 处",
+);
+check(
+  "client: 周榜只在切到它时才取数（收成胶囊 / 其它视图都不请求）",
+  /useBoard\(t, boardKind, state\.open && mode === "board"\)/.test(clientSource) && /useBoard\(t, boardKind, mode === "board"\)/.test(clientSource),
+);
+check(
+  "client: 周榜行复用 renderCard（命令/已装态/埋点只有一份实现）",
+  /function renderBoard\(data, kind, copiedCmd, onCopied, opts\)[\s\S]{0,2600}?renderCard\(item, copiedCmd, onCopied, !wide, false, wide\)/.test(clientSource),
+);
+check(
+  "client: 六个视图在 372px 面板里换滚动层（四字标签不再被裁切）",
+  clientSource.includes('"dph_segWrap dph_segWrapScroll"') && /\.dph_segWrapScroll \.dph_segBtn\{flex:none/.test(clientSource),
+);
+check(
+  "client: 周榜文案中英各一份（少一份就是半边界面漏文案）",
+  ['board.tab', 'board.top', 'board.installs', 'board.topWhy', 'board.installsWhy', 'board.offline', 'board.scale'].every(
+    (key) => (clientSource.match(new RegExp('"' + key.replace(".", "\\.") + '":', "g")) || []).length === 2,
+  ),
+  ["board.tab", "board.offline", "board.scale"]
+    .map((k) => k + "=" + (clientSource.match(new RegExp('"' + k.replace(".", "\\.") + '":', "g")) || []).length)
+    .join(" "),
+);
+check(
+  "client: 侧栏「查看完整榜单」仍指 /best —— 那张卡的数是分类精选，改指 /top 会让入口与内容对不上",
+  /href: SITE \+ "\/best"/.test(clientSource) && clientSource.includes('scope: "rail_board"'),
+);
+check(
+  "client: 周榜的「打开站点」按子榜给对应页面（/top 与 /ranking/installs 是两个口径）",
+  /boardKind === "top" \? "\/top" : "\/ranking\/installs"/.test(clientSource) &&
+    (clientSource.match(/boardKind === "top" \? "\/top" : "\/ranking\/installs"/g) || []).length === 2,
+  String((clientSource.match(/boardKind === "top" \? "\/top" : "\/ranking\/installs"/g) || []).length) + " 处",
 );
 
 /* --- v0.5.0 「我的插件中心」：卸载 + 忽略此版本 --- */
