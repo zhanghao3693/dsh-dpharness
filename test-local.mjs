@@ -2443,6 +2443,11 @@ check(
   /\.dph_btn\{[^}]*height:28px/.test(clientSource) && /\.dph_btn\{[^}]*border-radius:8px/.test(clientSource) && /\.dph_btnSm\{[^}]*height:28px/.test(clientSource) && !/height:24px/.test(clientSource),
 );
 check(
+  "client: 已收藏的卡片用左侧竖条标记，与「对比选中」的整卡描边区分开",
+  clientSource.includes('".dph_cardFav{border-left:3px solid') &&
+    (clientSource.match(/comparable && inFav\(item\) \? " dph_cardFav"/g) || []).length === 2,
+);
+check(
   "client: 选中（对比篮）的卡片整卡高亮，两个版式都生效",
   clientSource.includes('".dph_cardOn{') &&
     (clientSource.match(/comparable && inCompare\(item\) \? " dph_cardOn"/g) || []).length === 2,
