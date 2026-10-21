@@ -2437,8 +2437,15 @@ check(
    这一组守的是"同一类控件只有一个高度"：真机截图里出现过 22/26/30 三种按钮高度混排，
    靠人眼复核每次都漏，所以把令牌值写进断言。改版要调数值时**同步改这里**，别只改 CSS。 */
 check(
-  "client: 按钮高度只有两档（28 / 24），圆角 8",
-  /\.dph_btn\{[^}]*height:28px/.test(clientSource) && /\.dph_btn\{[^}]*border-radius:8px/.test(clientSource) && /\.dph_btnSm\{height:24px/.test(clientSource),
+  "client: 按钮只有一档高度 28（命令条与内容区同高），圆角 8",
+  /* 2026-10-21 第二轮：原先把 sm 做成 24，结果同一行里出现「命令块 28 / 复制命令 24 / 分享 24」。
+     实测把 sm 提到 28 后卡片高度不变（命令块本来就是 28），所以直接取消 24 档。 */
+  /\.dph_btn\{[^}]*height:28px/.test(clientSource) && /\.dph_btn\{[^}]*border-radius:8px/.test(clientSource) && /\.dph_btnSm\{[^}]*height:28px/.test(clientSource) && !/height:24px/.test(clientSource),
+);
+check(
+  "client: 选中（对比篮）的卡片整卡高亮，两个版式都生效",
+  clientSource.includes('".dph_cardOn{') &&
+    (clientSource.match(/comparable && inCompare\(item\) \? " dph_cardOn"/g) || []).length === 2,
 );
 check(
   "client: 标签统一 20px 高、圆角 6（不再用胶囊）",
