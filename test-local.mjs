@@ -2443,6 +2443,13 @@ check(
   /\.dph_btn\{[^}]*height:28px/.test(clientSource) && /\.dph_btn\{[^}]*border-radius:8px/.test(clientSource) && /\.dph_btnSm\{[^}]*height:28px/.test(clientSource) && !/height:24px/.test(clientSource),
 );
 check(
+  "client: 只用 DSH 主题里真实存在的变量（站点专属变量会让整条声明失效）",
+  /* 2026-10-21 真机事故：选中高亮用了站点的 --pill-accent-bg，DSH 主题里没这个变量，
+     background 整条作废 ⇒ 用户看到的是「选中没生效」。变量名在 App 包里 grep 过：
+     --dsw-alias-state-business-tertiary 存在（浅色 #e4edfd / 深色 #34415b）。 */
+  !clientSource.includes("--pill-accent-bg") && clientSource.includes("var(--dsw-alias-state-business-tertiary)"),
+);
+check(
   "client: 已收藏的卡片用左侧竖条标记，与「对比选中」的整卡描边区分开",
   clientSource.includes('".dph_cardFav{border-left:3px solid') &&
     (clientSource.match(/comparable && inFav\(item\) \? " dph_cardFav"/g) || []).length === 2,
