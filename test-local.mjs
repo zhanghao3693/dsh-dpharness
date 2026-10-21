@@ -2433,5 +2433,37 @@ check(
   /function railDailyCard[\s\S]{0,3000}?h\(ShareUnit, \{ item: item, scope: "rail"/.test(clientSource),
 );
 
+/* --- 2026-10-21 视觉规范（尺寸/层级统一） ---
+   这一组守的是"同一类控件只有一个高度"：真机截图里出现过 22/26/30 三种按钮高度混排，
+   靠人眼复核每次都漏，所以把令牌值写进断言。改版要调数值时**同步改这里**，别只改 CSS。 */
+check(
+  "client: 按钮高度只有两档（28 / 24），圆角 8",
+  /\.dph_btn\{[^}]*height:28px/.test(clientSource) && /\.dph_btn\{[^}]*border-radius:8px/.test(clientSource) && /\.dph_btnSm\{height:24px/.test(clientSource),
+);
+check(
+  "client: 标签统一 20px 高、圆角 6（不再用胶囊）",
+  /\.dph_tag\{[^}]*height:20px/.test(clientSource) && /\.dph_tag\{[^}]*border-radius:6px/.test(clientSource) && !/\.dph_tag\{[^}]*border-radius:999px/.test(clientSource),
+);
+check(
+  "client: 已安装徽标并入标签行（dph_tagSolid，不再单独占一行）",
+  clientSource.includes('"dph_tag dph_tagSolid"') && clientSource.includes('".dph_tagSolid{') && !clientSource.includes("installedRow"),
+);
+check(
+  "client: 卖点与正文开头相同时不重复渲染（sellEcho）",
+  /const sellEcho =/.test(clientSource) && /item\.sell && !sellEcho/.test(clientSource),
+);
+check(
+  "client: 动作区（安装行/命令条）与说明区有分隔线",
+  /\.dph_instRow\{[^}]*border-top:1px solid/.test(clientSource),
+);
+check(
+  "client: 区标题用竖条而不是第二条横线（两线并排会看不出层级）",
+  clientSource.includes('".dph_workHead::before{') && !/\.dph_workHead\{[^}]*border-bottom/.test(clientSource),
+);
+check(
+  "client: 右栏命令条是两列网格（命令跨列，复制/分享并排）",
+  /\.dph_cmdbarCol\{display:grid/.test(clientSource) && /\.dph_cmdbarCol \.dph_cmdbarCode\{grid-column:1\/-1/.test(clientSource),
+);
+
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
 process.exit(failures === 0 ? 0 : 1);
