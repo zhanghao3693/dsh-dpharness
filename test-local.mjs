@@ -1343,7 +1343,7 @@ check(
 );
 check(
   "client: 周榜行复用 renderCard（命令/已装态/埋点只有一份实现）",
-  /function renderBoard\(data, kind, copiedCmd, onCopied, opts\)[\s\S]{0,2600}?renderCard\(item, copiedCmd, onCopied, !wide, false, wide\)/.test(clientSource),
+  /function renderBoard\(data, kind, copiedCmd, onCopied, opts\)[\s\S]{0,2600}?renderCard\(item, copiedCmd, onCopied, !wide, false, wide, "board"\)/.test(clientSource),
 );
 check(
   "client: 六个视图在 372px 面板里换滚动层（四字标签不再被裁切）",
@@ -1426,7 +1426,11 @@ check(
 );
 check(
   "client: 对比开关放在卡片最左（多选的第一列位置固定，扫一眼就知道能选）",
-  /comparable \? h\("button", \{[\s\S]{0,240}?key: "cmp"/.test(clientSource) && /renderCard\((item|picked\.item), [^)]*true\)/.test(clientSource),
+  /* 2026-10-21 分享接入后 renderCard 多了第 7 参 scope（埋点用的视图名），
+     原先「调用点必须以 true) 结尾」的写法失效。断言改成「浮窗与页签两处都以
+     comparable=true 调用」—— 守的是同一个意图（卡片支持选择类动作），
+     且不锁死参数个数。 */
+  /comparable \? h\("button", \{[\s\S]{0,240}?key: "cmp"/.test(clientSource) && (clientSource.match(/renderCard\(item, cat\.copiedCmd, cat\.markCopied, (?:true|false), true, (?:true|false), "(?:picks|panel)"\)/g) || []).length === 2,
 );
 check(
   "client: 浮窗与页签都接了对比条（选择集共享，展开状态各自记）",
@@ -2382,6 +2386,45 @@ check(
 check(
   "client: 订阅成功判定要求 JSON（SPA 兜底回的 HTML 200 不能被当成成功）",
   /content-type/.test(clientSource) && /!jsonType/.test(clientSource),
+);
+
+/* --- 2026-10-21 分享接入（面板内三个动作：链接 / 文案 / 说明图） --- */
+check(
+  "client: 分享只在有 owner/repo 的条目上出现（拼不出详情页就不给入口）",
+  /fullName\.indexOf\("\/"\) < 0\) return null/.test(clientSource),
+);
+/* 归因是这件事的前提：面板现有外链全是裸链，落地全落「直接访问」，
+   不带 utm_source 的分享做了也看不见。 */
+check(
+  "client: 分享链接带 utm_source=dsh / utm_medium=panel / utm_content",
+  /utm_source=dsh&utm_medium=panel&utm_content=/.test(clientSource),
+);
+/* /og-card 用 Content-Disposition: attachment 直接给文件；该接口不带 CORS 头，
+   改成 fetch 取 PNG 再转 blob 会被浏览器拒，所以这里反向锁死「不许 fetch」。 */
+check(
+  "client: 说明图走 /og-card 直链下载（不做跨源 fetch）",
+  /"\/og-card\/" \+ sharePathOf\(fullName\) \+ "\.png"/.test(clientSource) && !/fetch\(shareCardOf/.test(clientSource),
+);
+/* 面板命令的 --profile 是本机真实值，分享给 profile 不同的人会装错位置
+   （2026-10-12 踩过），所以文案里只放链接、不放命令。 */
+check(
+  "client: 分享文案不带安装命令（不给接收方一条可能装错 profile 的命令）",
+  !/function shareTextOf[\s\S]{0,600}?item\.cmd/.test(clientSource),
+);
+check(
+  "client: 分享词条中英各一份（少一份就是半边界面漏文案）",
+  ["share.action", "share.toggle", "share.closeHint", "share.link", "share.linkHint", "share.text", "share.textHint", "share.card", "share.cardHint", "share.collapse"].every(
+    (key) => (clientSource.match(new RegExp('"' + key + '":', "g")) || []).length === 2,
+  ),
+);
+/* 动作名要能被 host 的 clean() 放行且在站点侧可聚合：share_* 五个，走 plugin_hub。 */
+check(
+  "client: 分享埋点走 plugin_hub，五个动作名齐全（open/close/link/text/card）",
+  ["share_open", "share_close", "share_link", "share_text", "share_card"].every((action) => clientSource.includes('"' + action + '"')),
+);
+check(
+  "client: 分享用行内展开而非绝对定位弹层（浮窗 .dph_panelBody 的 overflow 会裁掉浮层）",
+  clientSource.includes('"dph_shareWrap"') && !/dph_shareWrap\{[^}]*position:absolute/.test(clientSource),
 );
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
