@@ -2426,6 +2426,12 @@ check(
   "client: 分享用行内展开而非绝对定位弹层（浮窗 .dph_panelBody 的 overflow 会裁掉浮层）",
   clientSource.includes('"dph_shareWrap"') && !/dph_shareWrap\{[^}]*position:absolute/.test(clientSource),
 );
+/* 2026-10-21 真机截图发现的漏点：侧栏「今日推荐」卡自建命令条（不走 renderCard），
+   首版只接了 renderCard 两处，导致这一处没有分享入口。断言锁住"自建命令条也要接"。 */
+check(
+  "client: 侧栏今日推荐卡（自建命令条）也接了分享",
+  /function railDailyCard[\s\S]{0,3000}?h\(ShareUnit, \{ item: item, scope: "rail"/.test(clientSource),
+);
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
 process.exit(failures === 0 ? 0 : 1);
