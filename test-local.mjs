@@ -1832,8 +1832,34 @@ check(
 
 /* --- v0.5.0：一键升级 / 批量升级 --- */
 check(
-  "client: 一键升级复用安装通道，且目标用**具体版本号**（同一个 InstallRow，只换 kind）",
-  /h\(InstallRow, \{ key: "do", item: \{ pkg: String\(item\.name\) \+ "@" \+ String\(item\.latest\), current: item\.current \}, kind: "upgrade" \}\)/.test(clientSource),
+  "client: 一键升级复用安装通道，且目标用**具体版本号**（同一个 InstallRow，只换 kind/mode）",
+  /h\(InstallRow, \{\s*key: key \+ ":do",\s*mode: "act",\s*item: \{ pkg: String\(item\.name\) \+ "@" \+ String\(item\.latest\), current: item\.current \},\s*kind: "upgrade",?\s*\}\)/.test(clientSource),
+);
+/* --- 2026-10-22 用户截图：更新行里「升级」比同排按钮矮半格、「卸载」被甩到下一行最左 ---
+   根因两条：① InstallRow 是**块**（自带 padding-top:10px + 上边框），被内联进单行；
+            ② 状态与 6 个动作平铺在一条 flex 行里，换行按单个元素发生。
+   这里的四条断言把修复后的结构钉住，防止以后再被"顺手"改回平铺。 */
+check(
+  "client: 更新行分「信息段 / 动作段」，动作整组是一个 flex 项（换行整组换，不甩单个按钮）",
+  clientSource.includes('".dph_updActs{flex:none;max-width:100%;margin-left:auto')
+    && clientSource.includes('h("div", { className: "dph_updInfo", key: "info" }')
+    && clientSource.includes('h("div", { className: "dph_updActs", key: "acts" }'),
+);
+check(
+  "client: InstallRow 内联变体清零块外壳（padding-top + border 正是按钮矮半格的来源）",
+  clientSource.includes('".dph_instInline{margin-top:0;padding-top:0;border-top:0}"')
+    && clientSource.includes('const shell = (children) => h("div", { className: "dph_instRow" + (inline ? " dph_instInline" : "") }'),
+);
+check(
+  "client: 进度/结果/失败走行下块位，行内实例不出长文案（一行塞长句必然挤崩）",
+  clientSource.includes('mode: "block"')
+    && clientSource.includes('if (mode === "act" && (running || finished)) return null;')
+    && clientSource.includes('if (mode === "block" && !running && !finished && !failed) return null;'),
+);
+check(
+  "client: 二次确认问句在正文、命令说明在 title，按钮是短动词（原来按钮文案本身是个问句）",
+  clientSource.includes('"updates.upgradeGo"') && clientSource.includes('"updates.upgradeAsk"')
+    && clientSource.includes('title: upgrading ? t("updates.upgradeHint") : t("install.hint")'),
 );
 check(
   "client: 批量**串行**执行（宿主同一时刻只允许一个安装任务，并发只会拿到 409）",
