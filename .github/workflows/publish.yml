@@ -1,0 +1,74 @@
+# 用 npm Trusted Publishing（OIDC）从 GitHub Actions 直接发版 —— 无需 token、无需 OTP。
+#
+# 前置（在 npmjs.com 配置，只做一次）：
+#   Packages → dsh-dpharness → Settings → Trusted publishing → GitHub Actions
+#     Organization or user : zhanghao3693
+#     Repository           : dsh-dpharness
+#     Workflow filename    : publish.yml
+#     Allowed actions      : 勾上 "Allow npm publish"（新配置默认只给 stage publish）
+#
+# 为什么不用 `npm stage publish` + `stage approve`：
+#   文档明确 `stage approve/reject` 不能用 OIDC（要求 proof of presence），
+#   即每一步仍要人点 2FA —— 那就没有省事。直发才真正做到零人工。
+#
+# 触发：推 tag（v0.6.8 这种）或手动 workflow_dispatch。
+# 版本来源：package.json 的 version，不另行传参（避免 tag 与包版本漂移）。
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # OIDC 必需
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest # 仅云端 runner 支持 trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24" # 文档要求 >= 22.14
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false # 发布构建禁用缓存
+
+      # 文档要求 npm CLI >= 11.5.1 才能走 OIDC
+      - name: Ensure npm >= 11.5.1
+        run: |
+          npm install -g npm@latest
+          npm -v
+          node -e "const v=require('child_process').execSync('npm -v').toString().trim().split('.').map(Number); if (v[0]<11 || (v[0]===11 && v[1]<5)) { console.error('npm too old: '+v.join('.')); process.exit(1); }"
+
+      # tag 触发时校验版本一致；手动触发（分支）时跳过
+      - name: Verify version matches tag
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          echo "package.json version = $PKG"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            echo "tag = $TAG"
+            if [[ "$PKG" != "$TAG" ]]; then
+              echo "::error::package.json=$PKG 与 tag=$TAG 不一致，拒绝发布"
+              exit 1
+            fi
+          fi
+
+      # 打包自检：files 白名单漏文件是 0.6.3 的真实事故
+      - name: Pack check
+        run: npm pack --dry-run
+
+      # 不需要 NODE_AUTH_TOKEN：npm CLI 自动探测 OIDC 并换取短期凭证
+      # 公开仓库 + 公开包 ⇒ provenance 自动生成，无需 --provenance
+      - name: Publish
+        run: npm publish
+
+      - name: Show result
+        run: |
+          echo "published version:"
+          npm view dsh-dpharness version
+          npm view dsh-dpharness dist-tags.latest
