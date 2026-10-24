@@ -397,6 +397,108 @@ check(
   host.profileFromArgv(["/usr/local/bin/node", "/Users/x/ws/bin/dsh", "web", "--port", "8787"]) === null,
 );
 
+/* --- 客户端识别（2026-10-24）：官方桌面 / 官方 Web / 第三方 DSH Desktop ---
+   背景：严选插件同时装在官方客户端和第三方客户端（dshdesktop.cn）里，看板此前
+   把两方混成一个数。判据只能是宿主可执行文件名 —— 两者都是 Electron 薄壳，
+   `process.versions.electron` 会把它们归成一类（实测 DSH Desktop 2.0.17）。 */
+const OFFICIAL_EXE = "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness";
+const THIRD_EXE = "/Applications/DSH Desktop.app/Contents/MacOS/DSH Desktop";
+check("client: 官方桌面 → od", host.hostClientOf({ execPath: OFFICIAL_EXE, isElectron: true }) === "od", host.hostClientOf({ execPath: OFFICIAL_EXE, isElectron: true }));
+check("client: 第三方 DSH Desktop → td", host.hostClientOf({ execPath: THIRD_EXE, isElectron: true }) === "td", host.hostClientOf({ execPath: THIRD_EXE, isElectron: true }));
+check(
+  "client: 第三方 Beta 也是 td（同一发行通道的另一个 app）",
+  host.hostClientOf({ execPath: "/Applications/DSH Desktop Beta.app/Contents/MacOS/DSH Desktop Beta", isElectron: true }) === "td",
+);
+check(
+  "client: Linux 二进制名 dsh-desktop 也能认成 td",
+  host.hostClientOf({ execPath: "/opt/dsh-desktop/dsh-desktop", isElectron: true }) === "td",
+);
+check("client: 非 Electron → ow（官方 Web / launchd）", host.hostClientOf({ execPath: "/usr/local/bin/node", isElectron: false }) === "ow");
+check(
+  "client: 未登记的 Electron 壳 → tu（站点侧归「未知」，不硬分派）",
+  host.hostClientOf({ execPath: "/Applications/Some Shell.app/Contents/MacOS/Some Shell", isElectron: true }) === "tu",
+);
+check(
+  "client: Windows .exe 后缀被剥掉",
+  host.hostClientOf({ execPath: "C:\\Users\\x\\AppData\\Local\\Programs\\DSH Desktop\\DSH Desktop.exe", isElectron: true }) === "td",
+);
+
+/* appDataDir：没有 Electron API 时按平台推 userData（实测 DSH Desktop 用这个布局） */
+check(
+  "userData: macOS 在 ~/Library/Application Support/<product>",
+  host.appDataDir("DSH Desktop", { platform: "darwin", homedir: "/Users/x" }) === "/Users/x/Library/Application Support/DSH Desktop",
+  host.appDataDir("DSH Desktop", { platform: "darwin", homedir: "/Users/x" }),
+);
+check(
+  "userData: Windows 在 %APPDATA%/<product>",
+  host.appDataDir("DSH Desktop", { platform: "win32", homedir: "/Users/x", env: { APPDATA: "/c/Users/x/AppData/Roaming" } }) === path.join("/c/Users/x/AppData/Roaming", "DSH Desktop"),
+  host.appDataDir("DSH Desktop", { platform: "win32", homedir: "/Users/x", env: { APPDATA: "/c/Users/x/AppData/Roaming" } }),
+);
+check(
+  "userData: Linux 在 $XDG_CONFIG_HOME/<product>",
+  host.appDataDir("DSH Desktop", { platform: "linux", homedir: "/home/x", env: { XDG_CONFIG_HOME: "/home/x/.config" } }) === "/home/x/.config/DSH Desktop",
+  host.appDataDir("DSH Desktop", { platform: "linux", homedir: "/home/x", env: { XDG_CONFIG_HOME: "/home/x/.config" } }),
+);
+
+/* 第三方 CLI 候选：<userData>/cli/<sha>/bin/dsh，hash 目录只能枚举 */
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dph-cli-"));
+try {
+  const hashDir = path.join(tmpRoot, "cli", "deadbeef");
+  fs.mkdirSync(path.join(hashDir, "bin"), { recursive: true });
+  const fakeCli = path.join(hashDir, "bin", "dsh");
+  fs.writeFileSync(fakeCli, "#!/bin/sh\n", { mode: 0o755 });
+  fs.chmodSync(fakeCli, 0o755);
+  check(
+    "cli: 从第三方 userData 的 cli/<hash>/bin/dsh 找到 CLI",
+    host.thirdPartyCliCandidates(tmpRoot, { platform: "darwin" })[0] === fakeCli,
+    JSON.stringify(host.thirdPartyCliCandidates(tmpRoot, { platform: "darwin" })),
+  );
+  check(
+    "cli: 目录不存在时返回空数组（不抛异常、不猜路径）",
+    host.thirdPartyCliCandidates(path.join(tmpRoot, "nope"), { platform: "darwin" }).length === 0,
+  );
+} finally {
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+}
+check(
+  "cli: 官方 bundle 布局在第三方 app 里不存在时不再返回错误路径",
+  host.desktopShellCli(THIRD_EXE, true) === null ||
+    !host.desktopShellCli(THIRD_EXE, true).includes("Resources/runtime/cli"),
+  String(host.desktopShellCli(THIRD_EXE, true)),
+);
+
+/* 第三方 profile：读它自己的 profile-selection/state.json，且必须能在磁盘上验证 */
+check(
+  "profile: 读不到第三方状态时返回 null（绝不把未知当成 desktop）",
+  host.thirdPartyProfile(THIRD_EXE, { platform: "darwin", homedir: "/nonexistent-home-dph" }) === null,
+);
+function tmpHome(tag) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "dph-home-" + tag + "-"));
+}
+{
+  const fakeHome = tmpHome("state");
+  try {
+    const userData = path.join(fakeHome, "Library", "Application Support", "DSH Desktop");
+    fs.mkdirSync(path.join(userData, "profile-selection"), { recursive: true });
+    fs.writeFileSync(path.join(userData, "profile-selection", "state.json"), JSON.stringify({ version: 2, active: "desktop" }));
+    const profilePath = path.join(fakeHome, ".dsh", "profiles", "desktop");
+    fs.mkdirSync(profilePath, { recursive: true });
+    fs.writeFileSync(path.join(profilePath, "package.json"), "{}");
+    check(
+      "profile: 第三方 state 的 active 且目录存在 → 采用 desktop",
+      host.thirdPartyProfile(THIRD_EXE, { platform: "darwin", homedir: fakeHome }) === "desktop",
+      String(host.thirdPartyProfile(THIRD_EXE, { platform: "darwin", homedir: fakeHome })),
+    );
+    fs.rmSync(profilePath, { recursive: true, force: true });
+    check(
+      "profile: state 写了但 profile 目录不存在 → 仍返回 null（防止装到不存在的 profile）",
+      host.thirdPartyProfile(THIRD_EXE, { platform: "darwin", homedir: fakeHome }) === null,
+    );
+  } finally {
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+  }
+}
+
 function mockRes() {
   const out = { status: 0, body: null };
   return {
@@ -493,6 +595,10 @@ await routes["/api/dpharness/search"]({ method: "POST", url: "/api/dpharness/sea
 check("search: 非 GET → 405", res405.out.status === 405, "status=" + res405.out.status);
 
 /* --- telemetry relay: 站点契约 { type, value, path, visitorId } --- */
+/* plugin_hub 每条 value 的尾部由 host 统一追加：`…:c=<客户端>:v=<插件版本>`
+   （2026-10-24 新增客户端维度）。用导出常量拼期望值，而不是把 "ow" 写死 ——
+   写死会在 Electron 里跑测试时变成假失败。 */
+const CV = ":c=" + host.HOST_CLIENT + ":v=" + host.VERSION;
 async function relay(payload) {
   const out = mockRes();
   const req = mockReq("POST", "/api/dpharness/event", payload);
@@ -516,7 +622,7 @@ check("relay: UA 带插件标识", copy.forwarded && /dsh-dpharness\/\d+\.\d+\.\
 
 const search = await relay({ event: "plugin_hub", visitorId: vid, detail: { action: "search", length: 7, results: 23 } });
 body = search.forwarded && JSON.parse(search.forwarded.options.body);
-check("relay: plugin_hub 载荷", body && body.type === "plugin_hub" && body.value === "search:len=7:hits=23:v=" + host.VERSION, JSON.stringify(body));
+check("relay: plugin_hub 载荷", body && body.type === "plugin_hub" && body.value === "search:len=7:hits=23" + CV, JSON.stringify(body));
 check("relay: 不含搜索关键词原文", body && !/kimi|sidebar/i.test(String(body.value)), body && body.value);
 
 const bad = await relay({ event: "whatever", visitorId: vid, detail: {} });
@@ -532,7 +638,7 @@ const joinEvt = await relay({ event: "plugin_hub", visitorId: vid, detail: { act
 body = joinEvt.forwarded && JSON.parse(joinEvt.forwarded.options.body);
 check(
   "relay: 社群入口埋点带 via（scope 统一成 via）",
-  !!body && body.value === "community_join:via=qq:v=" + host.VERSION,
+  !!body && body.value === "community_join:via=qq" + CV,
   body && body.value,
 );
 
@@ -748,7 +854,7 @@ check("自动化测试未触发真实安装", sent.length === outboundBeforeInst
    失败、取消、重启、重启后是否生效全都没有记录。 */
 const hello = await relay({ event: "plugin_hub", visitorId: vid, detail: { action: "hello" } });
 body = hello.forwarded && JSON.parse(hello.forwarded.options.body);
-check("relay: 每条事件附插件版本（新埋点覆盖率的唯一判据）", body && body.value === "hello:v=" + host.VERSION, JSON.stringify(body && body.value));
+check("relay: 每条事件附插件版本（新埋点覆盖率的唯一判据）", body && body.value === "hello" + CV, JSON.stringify(body && body.value));
 
 const failed = await relay({
   event: "plugin_hub",
@@ -756,7 +862,7 @@ const failed = await relay({
   detail: { action: "install_failed", via: "local", why: "cli_exit" },
 });
 body = failed.forwarded && JSON.parse(failed.forwarded.options.body);
-check("relay: 安装失败带阶段与闭集原因", body && body.value === "install_failed:via=local:why=cli_exit:v=" + host.VERSION, JSON.stringify(body && body.value));
+check("relay: 安装失败带阶段与闭集原因", body && body.value === "install_failed:via=local:why=cli_exit" + CV, JSON.stringify(body && body.value));
 
 const whyDirty = await relay({
   event: "plugin_hub",
@@ -772,11 +878,11 @@ const postKnown = await relay({
   detail: { action: "post_install", via: "local", restarted: true, bundled: false },
 });
 body = postKnown.forwarded && JSON.parse(postKnown.forwarded.options.body);
-check("relay: 安装后回执（重启/生效两个布尔量）", body && body.value === "post_install:via=local:restarted=1:bundled=0:v=" + host.VERSION, JSON.stringify(body && body.value));
+check("relay: 安装后回执（重启/生效两个布尔量）", body && body.value === "post_install:via=local:restarted=1:bundled=0" + CV, JSON.stringify(body && body.value));
 
 const postUnknown = await relay({ event: "plugin_hub", visitorId: vid, detail: { action: "post_install", via: "market" } });
 body = postUnknown.forwarded && JSON.parse(postUnknown.forwarded.options.body);
-check("relay: 查不到就不写字段（未知必须区别于否）", body && body.value === "post_install:via=market:v=" + host.VERSION && !/restarted|bundled/.test(body.value), JSON.stringify(body && body.value));
+check("relay: 查不到就不写字段（未知必须区别于否）", body && body.value === "post_install:via=market" + CV && !/restarted|bundled/.test(body.value), JSON.stringify(body && body.value));
 
 /* postinstall 路由：两个判据都来自 host（客户端无法自证） */
 const pkgQuery = "pkg=dsh-dpharness&via=local&at=";
