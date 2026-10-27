@@ -2615,6 +2615,16 @@ check(
   "client: 右栏命令条是两列网格（命令跨列，复制/分享并排）",
   /\.dph_cmdbarCol\{display:grid/.test(clientSource) && /\.dph_cmdbarCol \.dph_cmdbarCode\{grid-column:1\/-1/.test(clientSource),
 );
+check(
+  "client: 侧栏分享展开态跨满整行（stack：收起留在原格，三个动作跨行）",
+  /\.dph_cmdbarCol \.dph_shareWrapStack\{grid-column:1\/-1/.test(clientSource)
+    && /const stack = !!props\.stack/.test(clientSource)
+    && /stack: true, key: "share"/.test(clientSource),
+);
+check(
+  "client: 窄屏命令条改真横排（<900px 整行卡片不再出现半屏宽的巨型按钮）",
+  /@media \(max-width:900px\)\{\.dph_cmdbarCol\{display:flex/.test(clientSource),
+);
 
 console.log(`\n${failures === 0 ? "全部通过" : failures + " 项失败"}`);
 process.exit(failures === 0 ? 0 : 1);
