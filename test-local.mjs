@@ -363,10 +363,12 @@ check("host: name 导出", host.name === "dpharness", host.name);
 check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.VERSION);
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
-/* 2026-10-20：周榜新增 /api/dpharness/board（第十二条）。这条断言写死条数是有意的
-   ——「宿主少注册一条路由」的典型症状是运行时 404，而 404 在界面上只表现为
-   "取数失败"，不加这个闸就只能靠用户撞。新增路由时必须同步改这里。 */
-check("host: 注册十二条路由", Object.keys(routes).length === 12, Object.keys(routes).join(", "));
+/* 2026-10-20：周榜新增 /api/dpharness/board（第十二条）；
+   2026-10-30：端维度新增 /api/dpharness/telemetry（第十三条，匿名统计开关同步）。
+   这条断言写死条数是有意的 ——「宿主少注册一条路由」的典型症状是运行时 404，
+   而 404 在界面上只表现为"取数失败"，不加这个闸就只能靠用户撞。
+   新增路由时必须同步改这里。 */
+check("host: 注册十三条路由", Object.keys(routes).length === 13, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -838,7 +840,11 @@ check("install: 非 GET/POST → 405", install405.out.status === 405, "status=" 
 
 const metaRoutes = mockRes();
 routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, metaRoutes);
-check("meta: 列出十一条路由", metaRoutes.out.body.routes.length === 11, JSON.stringify(metaRoutes.out.body.routes));
+/* ⚠️ 这里比上面少一条（12 vs 13）：meta 的 routes 列表**不含** /api/dpharness/board，
+   属既有遗漏（board 是 2026-10-20 加的路由，当时没同步进 meta）。本次只按现状更新
+   计数，没有顺手补 —— 补它会让「meta 是否如实反映注册表」这个独立问题被掩盖。
+   要修应单开一次：把 board 加进 meta 列表，两条断言变回同一数字。 */
+check("meta: 列出十二条路由", metaRoutes.out.body.routes.length === 12, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
