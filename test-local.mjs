@@ -45,6 +45,15 @@ let dailyPickUpstream = {
   date: "2026-11-18",
   pick: { fullName: "omdsh-dev/DSH-better-sidebar", nameZh: "可扩展侧边栏工作台" },
 };
+// 招商物料上游（2026-11-18）：默认一条 plugin-rail 物料；null=上游故障；items=[]=未上刊
+let pluginAdsUpstream = {
+  items: [{
+    slot: "plugin-rail", code: "pluginrail", id: "test-ad", kind: "ad",
+    tag: "赞助", brand: "测试品牌", title: "测试物料", desc: "描述",
+    points: ["卖点一"], cta: "去看看", url: "https://example.com", external: true,
+  }],
+  ts: 1700000000000,
+};
 const npmVersions = new Map();
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, options) => {
@@ -258,6 +267,11 @@ globalThis.fetch = async (url, options) => {
     if (dailyPickUpstream === null) return { ok: false, status: 502, json: async () => ({}) };
     return { ok: true, status: 200, json: async () => dailyPickUpstream };
   }
+  // 「招商物料」上游（站点 GET /api/plugin-ads）：null=故障；否则按可控变量
+  if (String(url).includes("/api/plugin-ads")) {
+    if (pluginAdsUpstream === null) return { ok: false, status: 502, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => pluginAdsUpstream };
+  }
   // 「分类精选」上游（站点 GET /api/best）：结构与真实接口一致（大类→小类→条目）
   if (String(url).includes("/api/best")) {
     return {
@@ -380,7 +394,8 @@ check("host: package.json 版本与代码常量一致", pkgVersion === host.VERS
    这条断言写死条数是有意的 ——「宿主少注册一条路由」的典型症状是运行时 404，
    而 404 在界面上只表现为"取数失败"，不加这个闸就只能靠用户撞。
    新增路由时必须同步改这里。 */
-check("host: 注册十四条路由", Object.keys(routes).length === 14, Object.keys(routes).join(", "));
+/* 2026-11-18：招商物料新增 /api/dpharness/plugin-ads（第十五条）。 */
+check("host: 注册十五条路由", Object.keys(routes).length === 15, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -749,6 +764,45 @@ check("daily-pick: 非 GET → 405", dp405.out.status === 405, "status=" + dp405
 // 恢复默认上游，避免影响后续测试
 dailyPickUpstream = { date: "2026-11-18", pick: { fullName: "omdsh-dev/DSH-better-sidebar", nameZh: "可扩展侧边栏工作台" } };
 
+/* --- 招商物料转发 /api/dpharness/plugin-ads（2026-11-18）---
+   缓存 60s 且不分 slot（站点一次返回全部），故命中态只测首次调用。
+   核心不变式：① 命中返回展示字段齐全；② kind/title/url 非法物料被形状校验丢弃
+   （不留空角标）；③ 非 GET → 405。 */
+const adReq = { method: "GET", url: "/api/dpharness/plugin-ads" };
+
+// 先注入一条合法 + 一条非法（缺 url / kind 非法），验证过滤
+pluginAdsUpstream = {
+  items: [
+    { slot: "plugin-rail", code: "pluginrail", id: "ok-1", kind: "ad", tag: "赞助",
+      brand: "品牌", title: "合法物料", desc: "描述", points: ["A", "B"],
+      cta: "去看", url: "https://example.com", external: true },
+    { slot: "plugin-inline", id: "bad-1", kind: "ad", title: "缺 url" },
+    { slot: "plugin-footer", id: "bad-2", kind: "unknown", title: "kind 非法", url: "https://x.com" },
+    { slot: "plugin-rail", id: "ok-2", kind: "own", tag: "推荐", title: "自有物料", url: "https://y.com" },
+  ],
+  ts: 1700000000000,
+};
+const adRes = mockRes();
+await routes["/api/dpharness/plugin-ads"](adReq, adRes);
+check("plugin-ads: 200 + ok", adRes.out.status === 200 && adRes.out.body.ok === true, "status=" + adRes.out.status);
+check("plugin-ads: 非法物料被丢弃（缺url/kind非法）", adRes.out.body.items.length === 2, JSON.stringify(adRes.out.body.items.map((i) => i.id)));
+check("plugin-ads: 保留 ad/own 两种 kind + 展示字段齐全", adRes.out.body.items.some((i) => i.kind === "ad") && adRes.out.body.items.some((i) => i.kind === "own") && adRes.out.body.items[0].title && adRes.out.body.items[0].url, JSON.stringify(adRes.out.body.items[0]));
+check("plugin-ads: 带 ts（上游时间戳透传）", adRes.out.body.ts === 1700000000000, String(adRes.out.body.ts));
+
+const ad405 = mockRes();
+await routes["/api/dpharness/plugin-ads"]({ method: "POST", url: "/api/dpharness/plugin-ads" }, ad405);
+check("plugin-ads: 非 GET → 405", ad405.out.status === 405, "status=" + ad405.out.status);
+
+// 恢复默认上游
+pluginAdsUpstream = {
+  items: [{
+    slot: "plugin-rail", code: "pluginrail", id: "test-ad", kind: "ad",
+    tag: "赞助", brand: "测试品牌", title: "测试物料", desc: "描述",
+    points: ["卖点一"], cta: "去看看", url: "https://example.com", external: true,
+  }],
+  ts: 1700000000000,
+};
+
 /* --- v0.5.0 套装（站点 /sets 同源）：跨插件纵向组合 ---
    与 best 的分工是「纵向 vs 横向」；命令同样必须由本机拼装（不能抄站点的 --profile web）。 */
 const setsRes = mockRes();
@@ -908,10 +962,10 @@ routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, met
    属既有遗漏（board 是 2026-10-20 加的路由，当时没同步进 meta）。本次只按现状更新
    计数，没有顺手补 —— 补它会让「meta 是否如实反映注册表」这个独立问题被掩盖。
    要修应单开一次：把 board 加进 meta 列表，两条断言变回同一数字。 */
-/* 2026-11-18：新增 daily-pick 后由十二条变十三条。
+/* 2026-11-18：新增 daily-pick、plugin-ads 后由十二条变十四条。
    注意 meta 的 routes 数组历来不含 /api/dpharness/board（既有偏差，不在本次范围），
    故条数比 host 的 routes 对象少一条。 */
-check("meta: 列出十三条路由", metaRoutes.out.body.routes.length === 13, JSON.stringify(metaRoutes.out.body.routes));
+check("meta: 列出十四条路由", metaRoutes.out.body.routes.length === 14, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
@@ -1890,6 +1944,19 @@ check("client: 有 resolveDailyPick 统一裁决 site/local（无第二份 pickD
 check("client: 今日推荐卡片标口径 data-pick-mode（同源/本地不冒充）", /data-pick-mode/.test(clientSource) && /pickMode === "site" \? "daily\.modeSite" : "daily\.modeLocal"/.test(clientSource));
 check("client: 口径文案中英各一份", /daily\.modeSite/.test(clientSource) && /Same as today's pick/.test(clientSource) && /showing local result/.test(clientSource));
 check("client: 今日推荐同源解析有埋点（能观测回落率）", /daily_pick_resolved/.test(clientSource));
+
+/* 招商广告位（2026-11-18）client 侧不变式：
+   ① 走 host 的 plugin-ads 路由（不跨域）；② 三个位只发一次请求（模块级共享）；
+   ③ 角标合规：kind=ad 强制「广告」、不读 tag；④ 三处挂载齐全；
+   ⑤ 埋点用 via/pkg 白名单段（新增字段会被 buildTrackPayload 丢弃）；⑥ i18n 中英。 */
+check("client: 招商物料走 host /api/dpharness/plugin-ads（不跨域打站点）", clientSource.includes('"/api/dpharness/plugin-ads"'));
+check("client: 招商物料模块级共享（三处只发一次请求）", /pluginAdsShared/.test(clientSource) && /pluginAdsInflight/.test(clientSource));
+check("client: 广告角标合规 kind=ad 强制「广告」且忽略 tag", /isAd \? t\("ad\.badge"\) : \(item\.tag/.test(clientSource));
+check("client: 三个位挂载齐全（rail/inline/footer）", /adOf\("plugin-rail"\)/.test(clientSource) && /adOf\("plugin-inline"\)/.test(clientSource) && /adOf\("plugin-footer"\)/.test(clientSource));
+check("client: AdCard 以组件形式渲染（内部有 hooks，不能当普通函数调用）", /h\(AdCard, \{ item:/.test(clientSource) && !/AdCard\(item, t, scope\)/.test(clientSource));
+check("client: 广告埋点用 via/pkg 白名单段（新字段会被中转丢弃）", /action: "ad_show", via:/.test(clientSource) && /pkg: String\(item\.id/.test(clientSource));
+check("client: 广告角标文案中英各一份", /"ad\.badge": "广告"/.test(clientSource) && /"ad\.badge": "Ad"/.test(clientSource));
+check("client: 面板窄形态只放一个位（P3），不塞三个", /adFooter/.test(clientSource) && !/h\(AdCard, \{ item: adOf\("plugin-rail"\).*scope: "panel"/.test(clientSource));
 
 /* 设置两处的渲染：一个行（通用）一个页（插件页签） */
 const setRowHtml = renderToStaticMarkup(react.createElement(registered["settings.general.item"].view, {}));
