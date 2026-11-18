@@ -40,6 +40,11 @@ const sent = [];
    · releases 默认空数组（与 2026-10-12 的线上实况一致：仓库没有发过 Release）；
    · npm 版本用一张表控制，**不在表里 = 镜像查不到（404）** —— 这是"查不到"三态的来源。 */
 let changelogUpstream = { releases: [] };
+// 今日推荐上游：默认命中 best 里那条 DSH-better-sidebar；null=上游故障；pick=null=站点空池
+let dailyPickUpstream = {
+  date: "2026-11-18",
+  pick: { fullName: "omdsh-dev/DSH-better-sidebar", nameZh: "可扩展侧边栏工作台" },
+};
 const npmVersions = new Map();
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, options) => {
@@ -247,6 +252,12 @@ globalThis.fetch = async (url, options) => {
       }),
     };
   }
+  // 「今日推荐」上游（站点 GET /api/daily-pick）：可控变量便于测命中/空池/上游失败
+  // 注意要在 /api/best 之前判断 —— 两者 URL 都含 dpharness.com，但路径不同
+  if (String(url).includes("/api/daily-pick")) {
+    if (dailyPickUpstream === null) return { ok: false, status: 502, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => dailyPickUpstream };
+  }
   // 「分类精选」上游（站点 GET /api/best）：结构与真实接口一致（大类→小类→条目）
   if (String(url).includes("/api/best")) {
     return {
@@ -364,11 +375,12 @@ check("host: 版本号形如 x.y.z", /^\d+\.\d+\.\d+$/.test(host.VERSION), host.
 const pkgVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 check("host: package.json 版本与代码常量一致", pkgVersion === host.VERSION, `package.json=${pkgVersion} code=${host.VERSION}`);
 /* 2026-10-20：周榜新增 /api/dpharness/board（第十二条）；
-   2026-10-30：端维度新增 /api/dpharness/telemetry（第十三条，匿名统计开关同步）。
+   2026-10-30：端维度新增 /api/dpharness/telemetry（第十三条，匿名统计开关同步）；
+   2026-11-18：今日推荐同源新增 /api/dpharness/daily-pick（第十四条）。
    这条断言写死条数是有意的 ——「宿主少注册一条路由」的典型症状是运行时 404，
    而 404 在界面上只表现为"取数失败"，不加这个闸就只能靠用户撞。
    新增路由时必须同步改这里。 */
-check("host: 注册十三条路由", Object.keys(routes).length === 13, Object.keys(routes).join(", "));
+check("host: 注册十四条路由", Object.keys(routes).length === 14, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -685,6 +697,58 @@ const best405 = mockRes();
 await routes["/api/dpharness/best"]({ method: "POST", url: "/api/dpharness/best" }, best405);
 check("best: 非 GET → 405", best405.out.status === 405, "status=" + best405.out.status);
 
+/* --- 今日推荐同源（2026-11-18）：/api/dpharness/daily-pick ---
+   核心不变式：① 命中 best → mode=site 且 item 是完整 best 条目（有 cmd/pkg/reason）；
+   ② 站点空池 / 不在 best / 上游失败 → mode=local + 明确 reason，永不静默；
+   ③ 永远 200（降级不是故障），只有非 GET 才 405。 */
+const dpReq = { method: "GET", url: "/api/dpharness/daily-pick" };
+const dateYesterday0 = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+// ① 命中：站点推荐的 fullName 在 best 里
+// mock date 用昨天（≠ nowDate=今天），确保不被更早的缓存干扰
+dailyPickUpstream = { date: dateYesterday0, pick: { fullName: "omdsh-dev/DSH-better-sidebar", nameZh: "可扩展侧边栏工作台" } };
+const dpHit = mockRes();
+await routes["/api/dpharness/daily-pick"](dpReq, dpHit);
+check("daily-pick: 命中 best → mode=site + matched", dpHit.out.status === 200 && dpHit.out.body.mode === "site" && dpHit.out.body.matched === true, JSON.stringify({ status: dpHit.out.status, mode: dpHit.out.body.mode, reason: dpHit.out.body.reason }));
+check(
+  "daily-pick: site 口径带完整 item（cmd/pkg/reason 都在，能直接渲染安装块）",
+  dpHit.out.body.item && dpHit.out.body.item.cmd === "dsh plugin --profile web add dsh-better-sidebar" && dpHit.out.body.item.pkg === "dsh-better-sidebar" && typeof dpHit.out.body.item.reason === "string" && dpHit.out.body.cat === "浏览器",
+  dpHit.out.body.item && `${dpHit.out.body.item.cmd} | cat=${dpHit.out.body.cat}`,
+);
+check("daily-pick: 带 date 与 fullName（可核对是否同一条）", dpHit.out.body.date === dateYesterday0 && dpHit.out.body.fullName === "omdsh-dev/DSH-better-sidebar", JSON.stringify({ date: dpHit.out.body.date, fullName: dpHit.out.body.fullName }));
+
+// 缓存按 date 键：路由用「真实今天 nowDate」比对缓存里的 date，命中则不取上游。
+// 要让每次测试都重取，mock 的 date 必须是「昨天」（≠ nowDate=今天）——
+// fetchDailyPick 存入的缓存 date=昨天，下次比对 nowDate=今天不命中 → 重取。
+// 真实场景里站点 date 恒等于当天，命中缓存是正确行为。
+const dateYesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+// ② 站点推荐不在 best 候选池 → 回落，reason=not_in_best
+dailyPickUpstream = { date: dateYesterday, pick: { fullName: "someone/not-in-best", nameZh: "池外插件" } };
+const dpMiss = mockRes();
+await routes["/api/dpharness/daily-pick"]({ method: "GET", url: "/api/dpharness/daily-pick" }, dpMiss);
+check("daily-pick: 不在 best → mode=local + reason=not_in_best", dpMiss.out.body.mode === "local" && dpMiss.out.body.matched === false && dpMiss.out.body.reason === "not_in_best", JSON.stringify({ mode: dpMiss.out.body.mode, reason: dpMiss.out.body.reason }));
+
+// ③ 站点空池（pick:null）→ 回落，reason=site_empty_pool
+dailyPickUpstream = { date: dateYesterday, pick: null };
+const dpEmpty = mockRes();
+await routes["/api/dpharness/daily-pick"]({ method: "GET", url: "/api/dpharness/daily-pick" }, dpEmpty);
+check("daily-pick: 站点空池 → mode=local + reason=site_empty_pool", dpEmpty.out.body.mode === "local" && dpEmpty.out.body.reason === "site_empty_pool", JSON.stringify({ mode: dpEmpty.out.body.mode, reason: dpEmpty.out.body.reason }));
+
+// ④ 上游故障 → 回落，reason=upstream_unavailable
+dailyPickUpstream = null;
+const dpDown = mockRes();
+await routes["/api/dpharness/daily-pick"]({ method: "GET", url: "/api/dpharness/daily-pick" }, dpDown);
+check("daily-pick: 上游故障 → 仍 200 且 mode=local（不把降级当故障）", dpDown.out.status === 200 && dpDown.out.body.mode === "local", JSON.stringify({ status: dpDown.out.status, mode: dpDown.out.body.mode, reason: dpDown.out.body.reason }));
+
+// ⑤ 非 GET → 405
+const dp405 = mockRes();
+await routes["/api/dpharness/daily-pick"]({ method: "POST", url: "/api/dpharness/daily-pick" }, dp405);
+check("daily-pick: 非 GET → 405", dp405.out.status === 405, "status=" + dp405.out.status);
+
+// 恢复默认上游，避免影响后续测试
+dailyPickUpstream = { date: "2026-11-18", pick: { fullName: "omdsh-dev/DSH-better-sidebar", nameZh: "可扩展侧边栏工作台" } };
+
 /* --- v0.5.0 套装（站点 /sets 同源）：跨插件纵向组合 ---
    与 best 的分工是「纵向 vs 横向」；命令同样必须由本机拼装（不能抄站点的 --profile web）。 */
 const setsRes = mockRes();
@@ -844,7 +908,10 @@ routes["/api/dpharness/meta"]({ method: "GET", url: "/api/dpharness/meta" }, met
    属既有遗漏（board 是 2026-10-20 加的路由，当时没同步进 meta）。本次只按现状更新
    计数，没有顺手补 —— 补它会让「meta 是否如实反映注册表」这个独立问题被掩盖。
    要修应单开一次：把 board 加进 meta 列表，两条断言变回同一数字。 */
-check("meta: 列出十二条路由", metaRoutes.out.body.routes.length === 12, JSON.stringify(metaRoutes.out.body.routes));
+/* 2026-11-18：新增 daily-pick 后由十二条变十三条。
+   注意 meta 的 routes 数组历来不含 /api/dpharness/board（既有偏差，不在本次范围），
+   故条数比 host 的 routes 对象少一条。 */
+check("meta: 列出十三条路由", metaRoutes.out.body.routes.length === 13, JSON.stringify(metaRoutes.out.body.routes));
 
 check("meta: 带 profile", typeof metaRoutes.out.body.profile === "string", metaRoutes.out.body.profile);
 check("meta: 带进程启动时间（判重启的基准）", Number.isFinite(metaRoutes.out.body.startedAt) && metaRoutes.out.body.startedAt <= Date.now(), String(metaRoutes.out.body.startedAt));
@@ -1812,6 +1879,17 @@ check(
   /ctx\.slots\.inject\(\s*"settings\.general\.item"/.test(clientSource) && /ctx\.slots\.inject\(\s*"settings\.plugins\.tab"/.test(clientSource),
 );
 check("client: 每日推荐开关落盘（下次进来仍然是关的）", /DAILY_KEY = "dph-hub-daily"/.test(clientSource) && /storeDaily\(/.test(clientSource));
+
+/* 今日推荐同源（2026-11-18）的 client 侧不变式：
+   ① 走本机 host 路由（不跨域打站点）；② 模块级共享缓存（三组件只发一次）；
+   ③ 有 resolve 统一决定 site/local，不让两处各自 pickDaily；
+   ④ 卡片标口径 data-pick-mode，两种文案中英齐全。 */
+check("client: 今日推荐走 host 路由 /api/dpharness/daily-pick（不跨域打站点）", clientSource.includes('"/api/dpharness/daily-pick"'));
+check("client: 今日推荐用模块级共享缓存（三组件只发一次请求）", /dailyPickShared/.test(clientSource) && /dailyPickInflight/.test(clientSource));
+check("client: 有 resolveDailyPick 统一裁决 site/local（无第二份 pickDaily 判定）", /function resolveDailyPick/.test(clientSource) && /mode = dailyPick && dailyPick\.matched/.test(clientSource));
+check("client: 今日推荐卡片标口径 data-pick-mode（同源/本地不冒充）", /data-pick-mode/.test(clientSource) && /pickMode === "site" \? "daily\.modeSite" : "daily\.modeLocal"/.test(clientSource));
+check("client: 口径文案中英各一份", /daily\.modeSite/.test(clientSource) && /Same as today's pick/.test(clientSource) && /showing local result/.test(clientSource));
+check("client: 今日推荐同源解析有埋点（能观测回落率）", /daily_pick_resolved/.test(clientSource));
 
 /* 设置两处的渲染：一个行（通用）一个页（插件页签） */
 const setRowHtml = renderToStaticMarkup(react.createElement(registered["settings.general.item"].view, {}));
