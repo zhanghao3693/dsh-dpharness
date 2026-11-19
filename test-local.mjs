@@ -395,7 +395,7 @@ check("host: package.json 版本与代码常量一致", pkgVersion === host.VERS
    而 404 在界面上只表现为"取数失败"，不加这个闸就只能靠用户撞。
    新增路由时必须同步改这里。 */
 /* 2026-11-18：招商物料新增 /api/dpharness/plugin-ads（第十五条）。 */
-check("host: 注册十五条路由", Object.keys(routes).length === 15, Object.keys(routes).join(", "));
+check("host: 注册十六条路由", Object.keys(routes).length === 16, Object.keys(routes).join(", "));
 
 /* --- Electron 桌面宿主：CLI 定位与 profile 判定 ---
    2026-09-30 用户实测：桌面版下每次安装都失败，错误是
@@ -1954,7 +1954,16 @@ check("client: 招商物料模块级共享（三处只发一次请求）", /plug
 check("client: 广告角标合规 kind=ad 强制「广告」且忽略 tag", /isAd \? t\("ad\.badge"\) : \(item\.tag/.test(clientSource));
 check("client: 三个位挂载齐全（rail/inline/footer）", /adOf\("plugin-rail"\)/.test(clientSource) && /adOf\("plugin-inline"\)/.test(clientSource) && /adOf\("plugin-footer"\)/.test(clientSource));
 check("client: AdCard 以组件形式渲染（内部有 hooks，不能当普通函数调用）", /h\(AdCard, \{ item:/.test(clientSource) && !/AdCard\(item, t, scope\)/.test(clientSource));
-check("client: 广告埋点用 via/pkg 白名单段（新字段会被中转丢弃）", /action: "ad_show", via:/.test(clientSource) && /pkg: String\(item\.id/.test(clientSource));
+/* 2026-11-19 契约变更：广告曝光/点击从 plugin_hub（VisitEvent）改走
+   /api/promo/track（PromoEvent）。原因见 client.js 的 promoReport 注释：
+   广告看板只读 PromoEvent，走 VisitEvent 会让插件位在看板上永远 0 行。 */
+check(
+  "client: 广告曝光/点击走 PromoEvent（位代码_show / _click）",
+  /promoReportShowOnce\(\(item\.code \|\| item\.slot\) \+ "_show"/.test(clientSource)
+    && /promoReport\(slotCode \+ "_" \+ action/.test(clientSource)
+    && /report\("click"\)/.test(clientSource)
+    && !/action: "ad_show"/.test(clientSource),
+);
 check("client: 广告角标文案中英各一份", /"ad\.badge": "广告"/.test(clientSource) && /"ad\.badge": "Ad"/.test(clientSource));
 check("client: 面板窄形态只放一个位（P3），不塞三个", /adFooter/.test(clientSource) && !/h\(AdCard, \{ item: adOf\("plugin-rail"\).*scope: "panel"/.test(clientSource));
 
