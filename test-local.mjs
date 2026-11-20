@@ -1951,7 +1951,7 @@ check("client: 今日推荐同源解析有埋点（能观测回落率）", /dail
    ⑤ 埋点用 via/pkg 白名单段（新增字段会被 buildTrackPayload 丢弃）；⑥ i18n 中英。 */
 check("client: 招商物料走 host /api/dpharness/plugin-ads（不跨域打站点）", clientSource.includes('"/api/dpharness/plugin-ads"'));
 check("client: 招商物料模块级共享（三处只发一次请求）", /pluginAdsShared/.test(clientSource) && /pluginAdsInflight/.test(clientSource));
-check("client: 广告角标合规 kind=ad 强制「广告」且忽略 tag", /isAd \? t\("ad\.badge"\) : \(item\.tag/.test(clientSource));
+check("client: 广告角标合规 kind=ad 强制「广告」且忽略 tag", /isAd \? t\("ad\.badge"\) : \(entry\.tag/.test(clientSource));
 check("client: 三个位挂载齐全（rail/inline/footer）", /adOf\("plugin-rail"\)/.test(clientSource) && /adOf\("plugin-inline"\)/.test(clientSource) && /adOf\("plugin-footer"\)/.test(clientSource));
 check("client: AdCard 以组件形式渲染（内部有 hooks，不能当普通函数调用）", /h\(AdCard, \{ item:/.test(clientSource) && !/AdCard\(item, t, scope\)/.test(clientSource));
 /* 2026-11-19 契约变更：广告曝光/点击从 plugin_hub（VisitEvent）改走
@@ -1960,11 +1960,49 @@ check("client: AdCard 以组件形式渲染（内部有 hooks，不能当普通�
 check(
   "client: 广告曝光/点击走 PromoEvent（位代码_show / _click）",
   /promoReportShowOnce\(\(item\.code \|\| item\.slot\) \+ "_show"/.test(clientSource)
-    && /promoReport\(slotCode \+ "_" \+ action/.test(clientSource)
-    && /report\("click"\)/.test(clientSource)
+    && /promoReport\(entryCode \+ "_click"/.test(clientSource)
     && !/action: "ad_show"/.test(clientSource),
 );
 check("client: 广告角标文案中英各一份", /"ad\.badge": "广告"/.test(clientSource) && /"ad\.badge": "Ad"/.test(clientSource));
+/* 轮播（2026-11-20）：与全站 C 组同一套口径 —— 8 秒自动 + 圆点，
+   四条边界（悬停/手动停自动/reduced-motion/后台）一个都不能少；单条位不得出控件
+   （否则 DOM 与「单条=独占」的既有交付形态不一致）；手动切条埋点不得写 PromoEvent ——
+   服务端把非 _click 一律计曝光，会把 CTR 分母打脏。 */
+check("client: 招商位轮播与全站同档（8 秒）", /AD_CAROUSEL_MS = 8000/.test(clientSource));
+check(
+  "client: 轮播四条边界齐全（悬停 / 手动停自动 / reduced-motion / 后台）",
+  /stopped \|\| hovered \|\| focusWithin \|\| docHidden \|\| reduced/.test(clientSource)
+    && /prefers-reduced-motion: reduce/.test(clientSource)
+    && /visibilitychange/.test(clientSource),
+);
+check(
+  "client: 手动切条埋点走 plugin_hub 的 ad_switch（不写 PromoEvent）",
+  /action: "ad_switch"/.test(clientSource) && !/promoReport\([^)]*switch/.test(clientSource),
+);
+check(
+  "client: 四个挂载点都传该位全部物料（三处页签 + 浮窗页脚）",
+  (clientSource.match(/items: adsOf\(/g) || []).length === 3 && /items: adFooterList/.test(clientSource),
+);
+check("client: 圆点文案中英各一份", /"ad\.dots": "展示内容切换"/.test(clientSource) && /"ad\.dots": "Sponsored cards"/.test(clientSource));
+
+/* 渲染期验证（不是源码字符串）：控件是否出现，取决于该位实际物料条数。
+   单条位必须**完全**没有切换控件 —— 「一条物料 = 独占交付」的 DOM 不能变。 */
+const adFixture = {
+  slot: "plugin-rail", code: "pluginrail", id: "ad-a", kind: "ad",
+  title: "A", desc: "d", cta: "go", url: "https://example.com", external: true,
+};
+const adFixtureB = Object.assign({}, adFixture, { id: "ad-b", title: "B" });
+const tKey = (key) => key;
+const adMultiHtml = renderToStaticMarkup(
+  react.createElement(client.AdCard, { item: adFixture, items: [adFixture, adFixtureB], t: tKey }),
+);
+const adSingleHtml = renderToStaticMarkup(
+  react.createElement(client.AdCard, { item: adFixture, items: [adFixture], t: tKey }),
+);
+check("adCard: 多条渲染圆点（2 个）且只有 1 个是当前条", (adMultiHtml.match(/class="dph_adDot"/g) || []).length === 2 && (adMultiHtml.match(/aria-current="true"/g) || []).length === 1);
+check("adCard: 单条不渲染圆点（DOM 与改造前一致）", !adSingleHtml.includes("dph_adDots"));
+check("adCard: 非当前条不可见（grid 堆叠占位，卡片高度不跳）", (adMultiHtml.match(/dph_adItemOff/g) || []).length === 1);
+check("adCard: 角标仍是「广告」而不是物料的 tag", adMultiHtml.includes("ad.badge"));
 check("client: 面板窄形态只放一个位（P3），不塞三个", /adFooter/.test(clientSource) && !/h\(AdCard, \{ item: adOf\("plugin-rail"\).*scope: "panel"/.test(clientSource));
 
 /* 设置两处的渲染：一个行（通用）一个页（插件页签） */
